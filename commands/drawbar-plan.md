@@ -78,7 +78,15 @@ Break the work into sequential stories (small enough to implement and review ind
 
 ```
 ## What
-[Clear description of what to implement.]
+[Clear description of what to implement, in one paragraph.]
+
+## Assumed context
+[The documents a reader must already have. Write "None — this story stands alone" when true.
+Overnight work needs standalone stories: nobody is awake to reconstruct context.]
+
+## Terms
+[Each product word whose looseness would change the code, bound once to its code symbol or its
+exact scope. "None" is an answer when no term is load-bearing.]
 
 ## Context
 [Relevant findings, constraints, patterns from the spec and recall. Your own conclusions
@@ -86,22 +94,38 @@ about how the code behaves live here, each with file:line and the question it an
 
 ## Read set
 [One line per read: what it established, and what it did NOT. A claim in this ticket that
-no entry backs is a defect.]
+no entry backs is a defect. For inherited references, state the degree of checking and the
+commit they came from.]
 
 ## Decisions
 ### Locked
-[Inherited from the parent — MUST be honored, do not re-debate.]
+[Inherited from the parent — MUST be honored, do not re-debate. Each entry names its authority
+and is backed by a Read set line. Write formulas, paths, or commands — not intentions.]
+### Locked non-changes
+[Every review finding whose resolution is "do not do the tempting thing", with its reason in one
+clause and its authority named. This is where a review conclusion survives to the implementer.]
 ### Discretion
 [Where the implementing agent may choose.]
 
+## Approaches ruled out
+[One line each, including the layer the fix does not live in.]
+
+## Scope
+[The files this story touches, derived by tracing from the changed types and functions to every
+production builder and caller — not by naming the ones you have in mind. Then the work explicitly
+out of scope, and anything the implementer must never touch.]
+
+## Open questions
+[Each marked blocking or non-blocking, each with an owner. A story with an unanswered blocking
+question is not Ready. "None" is an answer.]
+
 ## Testing
-[Specific test cases and edge cases — testable.]
+[Specific test cases and edge cases — testable. Include the axes the surface already has:
+multi-select, the aggregate case, the empty state, permission scope.]
 
 ## Validation
-[Acceptance criteria.]
-
-## Files
-[Specific file paths this story will touch.]
+[Acceptance criteria. Each one names the command, query, screen, or preview URL that settles it.
+For any guard or rollback path, the criterion is a demonstration that it fires.]
 
 ## Dependencies
 [Earlier stories that must be done first — defines order.]
@@ -109,6 +133,10 @@ no entry backs is a defect.]
 ## References
 [Sources: spec sections, recalled knowledge keys, files.]
 ```
+
+This template is the `ticket-quality` standard's required section list. Section 4 gates on it, and the
+mechanical pre-check will reject a story that drops one. Read that skill for what each section is for and
+the failure each prevents.
 
 ### What may carry the `Locked` label
 
@@ -126,9 +154,38 @@ and an observation is not a choice.
 
 This narrows `Locked`; it does not soften it. What still qualifies stays absolute.
 
-## 4. Cross-check (warning-only)
+## 4. Ready bar (gate, not a warning)
 
-Before creating issues, verify each story: all template sections present; acceptance criteria are testable; every recalled `MUST-CHECK:` is covered by a Locked decision; scope is reasonable for one sitting. Report any gaps as warnings.
+You wrote these stories. You are the last agent who can be trusted to say whether they are good, so
+you do not say it.
+
+First, the free mechanical pass. Write each story to a local markdown file and run:
+
+```bash
+/Users/reid/dev/meta-agent-repo/canonical-bundle/bin/ticket-precheck story-*.md
+```
+
+It checks form only — required sections, Locked entries that read as beliefs, acceptance criteria
+that name nothing to run, unmarked open questions, and the word budget. A story that fails here never
+costs an agent.
+
+Then dispatch `ticket-simulator` and `ticket-premise-auditor` concurrently over the stories that
+passed. Neither may be you, and neither reads the other's output. Give each one the story text and
+the repository, and nothing else — no summary of what you believe is right, and no note about what
+the other found.
+
+A story is Ready when the simulator returns sufficient and the auditor returns sound. Unsupported
+from the auditor means fix the sentences it names and re-run the auditor alone. Not sufficient or
+unsound means the story goes back to you for rewriting, and a rewritten story is a new artifact that
+is reviewed again.
+
+You may rebut a finding once, in writing, in the story itself. The rebuttal stays there. Then the
+operator decides. Do not re-review the same text after a rebuttal.
+
+Also verify, and report as warnings rather than as gates: every recalled `MUST-CHECK:` entry is
+covered by a Locked decision, and the dependency order holds.
+
+The full standard is the `ticket-quality` skill; the review doctrine is `adversarial-review`.
 
 ## 5. Create the sub-issues
 

@@ -49,6 +49,27 @@ Before writing any code, confirm the story isn't building on an incomplete base:
 - For each: verify it is **merged / Done** (`get_issue` for an issue id; `gh pr view <url> --json state,merged` for a PR link).
 - **If any prerequisite is unmet, stop and report it** ("blocked by `<id/PR>` — not yet merged"). Do not implement against a base that doesn't exist yet — it produces code that won't compile or that silently builds on stale schema.
 
+## 3.5 Ready bar (gate)
+
+A story that has not passed the Ready bar does not get implemented. Write the story description to a
+local file and run the mechanical pass first:
+
+```bash
+/Users/reid/dev/meta-agent-repo/canonical-bundle/bin/ticket-precheck story.md
+```
+
+Then dispatch `ticket-simulator` and `ticket-premise-auditor` concurrently. Neither may be you or the
+`story-implementer`. Proceed only on sufficient from the simulator and sound from the auditor;
+unsupported means fix the named sentences and re-run the auditor alone. An absent review is a
+failing state, not a passing one — when a reviewer errors or returns nothing, say which one and stop.
+
+A story written by `/drawbar-plan` has already passed this bar. Re-running it here is not required
+when the story text is unchanged since it passed; say that you checked and moved on. A story that
+arrived any other way — written by hand, imported, or edited since — has not passed and must.
+
+This is where the cost belongs. A story that fails here costs a rewrite. The same story failing in
+review costs an implementation, a review, a fix pass, and a second review.
+
 ## 4. Delegate implementation to a Sonnet agent
 
 You are the lead (Opus): you orchestrate and verify, you do **not** type the implementation. Move the story to `In Progress` (`save_issue`), then dispatch the **`story-implementer`** agent (it runs on Sonnet) to build the story test-first:
