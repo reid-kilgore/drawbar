@@ -103,6 +103,14 @@ Dispatch the `design-reviewer` agent with the proposed spec and approach. It che
 
 If a finding **conflicts with a decision the user has explicitly locked**, do not resolve it unilaterally — surface it back to the user as a focused question with the reviewer's evidence and your recommendation, and let them re-decide. Don't silently override the user, and don't silently comply against strong evidence.
 
+> **A lock is not permanent, and it has an exit.** `/drawbar-work` raises an `UNLOCK-REQUEST:` comment on
+> this parent when a story's evidence contradicts a locked decision. Treat one as a re-decision, not as an
+> implementer arguing: read the evidence it cites first-hand, then either re-lock the decision with the
+> reason the evidence does not change it, or change the decision and re-thread every section and story that
+> inherited it. Log the outcome as a `DECISION:` comment either way, so the next reader sees the question was
+> asked and answered. An unlock request that is neither granted nor refused is the failure this exit exists
+> to prevent.
+
 > **Design is iterative.** Users add or change constraints after the approach is picked. When that happens: (1) re-thread the spec so all affected sections stay consistent; (2) update any already-logged `DECISION:` comment the change invalidates; (3) re-run or re-notify the `design-reviewer` if the change is material (new surface, new security/PII implication, changed data model). The locked spec is **not** append-only.
 
 ## 5.5 Consistency check (before locking)

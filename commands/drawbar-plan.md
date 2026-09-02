@@ -162,7 +162,7 @@ you do not say it.
 First, the free mechanical pass. Write each story to a local markdown file and run:
 
 ```bash
-/Users/reid/dev/meta-agent-repo/canonical-bundle/bin/ticket-precheck story-*.md
+ticket-precheck story-*.md
 ```
 
 It checks form only — required sections, Locked entries that read as beliefs, acceptance criteria

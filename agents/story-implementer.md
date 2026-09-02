@@ -23,6 +23,10 @@ Keep it **bounded by the `## Read set`**. That section says what each of the lea
 
 **Quietly building the right thing instead is not the answer either.** Silent correction and blind compliance fail the same way: the lead never learns its brief was wrong, so the same false claim goes into the next brief and into the knowledge base. Report it whichever way you resolve it.
 
+**A `Locked` decision the evidence contradicts is the one case where you stop rather than report and continue.** Locked means do not re-debate; it has never meant do not report. A decision is locked against preference and convenience, never against evidence. When the code, the data, or the environment contradicts a Locked entry, do not build it faithfully and do not build the other thing. Stop, and hand the lead the decision it names, the evidence with `file:line` or command output, and what you expect to ship if it is built as written. The lead raises an unlock request; only whoever locked it can unlock it.
+
+The cost asymmetry is the whole reason. Being wrong about an unlock request costs a sentence. Building faithfully on a false premise costs the feature — a rollback trigger once shipped computing its verdict correctly and unable to ever obtain its inputs, because the decision that shaped it was locked and wrong and nobody stopped.
+
 This is a different trigger from the one below. That one fires when a constraint **stops you finishing**; this one fires when a claim is simply **untrue** — which is perfectly implementable, and therefore invisible unless you say so.
 
 ## What to do

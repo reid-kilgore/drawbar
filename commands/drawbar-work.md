@@ -55,7 +55,7 @@ A story that has not passed the Ready bar does not get implemented. Write the st
 local file and run the mechanical pass first:
 
 ```bash
-/Users/reid/dev/meta-agent-repo/canonical-bundle/bin/ticket-precheck story.md
+ticket-precheck story.md
 ```
 
 Then dispatch `ticket-simulator` and `ticket-premise-auditor` concurrently. Neither may be you or the
@@ -69,6 +69,16 @@ arrived any other way — written by hand, imported, or edited since — has not
 
 This is where the cost belongs. A story that fails here costs a rewrite. The same story failing in
 review costs an implementation, a review, a fix pass, and a second review.
+
+Record what each reviewer found and what happened to it. A rule can only be judged by counting:
+
+```bash
+tq-ledger record finding --story <id> --rule TQ4 --reviewer ticket-simulator --outcome accepted
+```
+
+`--outcome` is `accepted`, `rebutted`, or `waived`. Record a rebuttal as readily as an acceptance — a rule
+whose findings are usually rebutted is a bad rule, and that only becomes visible if the rebuttals are
+counted too.
 
 ## 4. Delegate implementation to a Sonnet agent
 
@@ -130,6 +140,35 @@ The brief must hand the agent everything it needs to work without you:
 - The instruction to work in red→green increments, **show the RED run**, and return a verifiable report — not to commit, push, open a PR, change Linear status, or run reviews. Those are yours.
 
 For a story large enough to split into independent, non-conflicting slices, you may dispatch more than one `story-implementer` in parallel — but only when the slices don't touch the same files. Most stories are one agent.
+
+## 4.5 Unlock requests — when the story's Locked decisions turn out to be wrong
+
+`Locked` means do not re-debate. It has never meant do not report. A decision is locked against preference
+and convenience; it was never locked against evidence.
+
+When you or the implementer find that a Locked decision is contradicted by the code, the data, or the
+environment, stop that story. Do not build it faithfully, and do not quietly build the other thing.
+
+Raise the unlock request where the decision lives, not in a report:
+
+1. `save_comment` on the **parent** issue, prefixed `UNLOCK-REQUEST:`, naming the decision, the evidence
+   with `file:line` or command output, and the consequence you expect if it is built as written.
+2. Move the story out of `In Progress` and say why in the story.
+3. Stop and tell the operator. Only the authority that locked it can unlock it — a design-review outcome
+   goes back to a design review, an operator decision goes back to the operator.
+
+Do not batch these to the end. An unlock request raised after the code is written is a rewrite; raised
+before, it is a sentence.
+
+The knowledge base is not the destination. A `MUST-CHECK:` entry teaches the next story and does nothing for
+this one, whose spec is still wrong.
+
+**Why this step exists.** A forecasting specification carried six operator decisions and two did not survive
+contact with implementation. Neither was surfaced back for re-decision. One asked for a rollback trigger:
+what shipped computes its verdict correctly and can never obtain the inputs to compute one for the tenants
+it protects, and the session's own summary four days later said the trigger still cannot fire. The other was
+a mechanism the operator had explicitly cut, which merged as dead scaffolding after a reviewer flagged it.
+Both were locked, both were wrong, and there was no way out of the lock.
 
 ## 5. Verify completion (gate — before any review)
 
@@ -196,6 +235,26 @@ For a mistake to guard against in future, use type `learned` with content beginn
 4. Post a short summary comment on the story (`save_comment`) with what shipped and the PR link.
 
 If the Linear MCP is unavailable, do the implementation, KB capture, commit and PR locally; skip the Linear comment/status updates and tell the user.
+
+## 8.5 Record the gate escapes
+
+Before you report, answer one question: what did the implementer need that neither the story nor either
+ticket reviewer surfaced?
+
+Those are gate escapes, and they are the only thing that teaches the standard. Everything the reviewers
+caught is the gate working. Everything the story already carried is the story working. What leaked through
+both is the finding.
+
+```bash
+tq-ledger record escape --story <id> --rule TQ6 --note "one sentence, plain English"
+```
+
+Use the rule that should have caught it. When no rule covers it, that is the more interesting result: record
+it against `TQ0` and say in the note what rule would have. A rule that does not exist yet is invisible
+otherwise.
+
+Record nothing when nothing escaped. An empty result here is a real result and it is the one the standard is
+trying to produce.
 
 ## 9. Report
 
