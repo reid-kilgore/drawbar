@@ -1,15 +1,12 @@
 ---
 name: drawbar-setup
-description: Configure Drawbar for a repository, including its Linear team, optional project, knowledge store, and required local tools. Use when the user invokes $drawbar-setup or asks to set up Drawbar.
+description: Set up drawbar for the current project: link the knowledge-base CLI, configure the Linear team, initialize knowledge, optionally import legacy knowledge, and verify Linear access. Use when the user asks to set up or initialize drawbar.
 ---
 
-# Drawbar setup for Codex
+# Set up drawbar
 
-Read `../../commands/drawbar-setup.md` completely, then follow it with the user's remaining text as `$ARGUMENTS`.
+Follow the authoritative workflow in `commands/drawbar-setup.md` in this plugin.
 
-Codex runtime adaptations:
+Codex does not use Claude slash-command variables. Treat the user's request after “set up drawbar” as the optional legacy knowledge-file argument. Where that workflow refers to `$ARGUMENTS`, use that value. Before a command that uses `${CLAUDE_PLUGIN_ROOT}`, set that variable to this installed plugin's root directory (the directory containing `package.json`); the variable name is retained solely for cross-host compatibility.
 
-- Use the available Linear MCP tools instead of Claude-specific tool names.
-- Use an explicitly selected `gpt-5.6-luna` agent for delegated mechanical checks.
-- Apply current user instructions and repository `AGENTS.md` files before the command defaults.
-- Do not commit setup changes on the primary agent thread. Use an explicitly selected Luna commit agent when a commit is requested.
+Use the connected Linear MCP tools when available. If they are unavailable, complete the local setup and clearly say that Linear write-backs cannot yet run.

@@ -1,18 +1,8 @@
 ---
 name: drawbar-ship
-description: Execute dependency-ordered Drawbar stories through isolated implementation, review, commits, stacked pull requests, recovery, and Linear updates. Use when the user invokes $drawbar-ship or asks Drawbar to ship a planned issue graph.
+description: Take one drawbar Linear story to a reviewed pull request and hand it to a human for merging. Use when the user asks to ship a drawbar story or burn down a parent issue.
 ---
 
-# Drawbar ship for Codex
+# Ship with drawbar
 
-Read `../../commands/drawbar-ship.md` completely, then follow it with the user's remaining text as `$ARGUMENTS`.
-
-Codex runtime adaptations:
-
-- Use explicitly selected `gpt-5.6-terra` agents for story implementation and substantive review.
-- Use explicitly selected `gpt-5.6-sol` agents only for architecture or plan-level ambiguity.
-- Use explicitly selected `gpt-5.6-luna` agents for worktree mechanics, tests, formatting, CI monitoring, and commits.
-- Never commit on the primary agent thread. Before dispatching a Luna commit agent, run the repository-required typecheck and lint prechecks.
-- Preserve one writer per pull request and the command's recovery rules.
-- Use the available Linear and GitHub tools instead of Claude-specific tool names.
-- Apply current user instructions and repository `AGENTS.md` files before the command defaults.
+Follow the authoritative workflow in `commands/drawbar-ship.md` in this plugin. Treat the requested parent or story issue id as that workflow's `$ARGUMENTS`. Before a command that uses `${CLAUDE_PLUGIN_ROOT}`, set that variable to this installed plugin's root directory (the directory containing `package.json`); the variable name is retained solely for cross-host compatibility. Preserve its rule that nothing is merged automatically.
