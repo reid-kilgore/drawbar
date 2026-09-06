@@ -80,6 +80,16 @@ tq-ledger record finding --story <id> --rule TQ4 --reviewer ticket-simulator --o
 whose findings are usually rebutted is a bad rule, and that only becomes visible if the rebuttals are
 counted too.
 
+Be honest about which of the three it was, because you are the ticket's author and the incentive runs one
+way. `accepted` means you changed the ticket. `rebutted` means you wrote a rebuttal into the ticket saying
+why the finding does not hold and left the ticket as it was — the operator decides from there, per the
+`adversarial-review` doctrine. `waived` means you neither fixed nor argued, and shipped anyway; that is a
+legitimate outcome and it is the one most likely to be quietly logged as `accepted`.
+
+Across the ledger's first thirty-two findings, none was recorded as rebutted. Either every finding really
+was right, or the distinction above is being collapsed. If you find yourself reaching for `accepted` because
+it is the shortest word, that is the failure.
+
 ## 4. Delegate implementation to a Sonnet agent
 
 You are the lead (Opus): you orchestrate and verify, you do **not** type the implementation. Move the story to `In Progress` (`save_issue`), then dispatch the **`story-implementer`** agent (it runs on Sonnet) to build the story test-first:

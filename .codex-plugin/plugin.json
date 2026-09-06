@@ -1,0 +1,35 @@
+{
+  "name": "drawbar",
+  "version": "0.3.0+codex.20260810220340",
+  "description": "Lean, Linear-native design, planning, implementation, shipping, and learning workflows for Codex.",
+  "author": {
+    "name": "mjn",
+    "url": "https://github.com/mjn298"
+  },
+  "repository": "https://github.com/mjn298/drawbar",
+  "keywords": [
+    "linear",
+    "planning",
+    "implementation",
+    "review",
+    "knowledge"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Drawbar",
+    "shortDescription": "Linear-native design, plan, work, ship, and learn workflows.",
+    "longDescription": "Use Drawbar to turn a Linear issue into a reviewed design, executable story plan, tested implementation, pull request, and durable project knowledge.",
+    "developerName": "mjn",
+    "category": "Productivity",
+    "capabilities": [
+      "Linear",
+      "Software development",
+      "Knowledge capture"
+    ],
+    "defaultPrompt": [
+      "Design a feature with Drawbar.",
+      "Plan a Drawbar issue into stories.",
+      "Implement the next Drawbar story."
+    ]
+  }
+}
