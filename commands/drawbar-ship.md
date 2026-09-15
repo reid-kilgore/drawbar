@@ -79,6 +79,12 @@ the recovery is a human rebase, and this command has no opinion about it.
 command -v drawbar-kb >/dev/null || { echo "no drawbar-kb — run /drawbar-setup"; exit 1; }
 command -v gh        >/dev/null && gh auth status >/dev/null 2>&1 || { echo "gh not authed"; exit 1; }
 
+# A WARNING, not a halt: only a story stacked on a previous story's branch (every story after
+# the first in a run) reaches the `gt track` / `gt submit` path that opens its PR, so a
+# single-story or leaf run never needs this. A multi-story run that does need it fails loud at
+# that later, story-specific point instead of here.
+command -v gt >/dev/null 2>&1 || echo "WARNING: no \`gt\` (Graphite) CLI — any story after the first in this run will fail to open its PR"
+
 # A WARNING, never an exit: a brief-sourced review is degraded but honest, and it is reported as such.
 # Unattended, the operator's only signal is this line — without it "every story is flagged because
 # this machine has no CLI" and "every story is flagged because every story has caveats" print the
@@ -516,6 +522,14 @@ default would silently fall back to the repo's default branch, producing a PR wh
 carries every earlier story's work too — green, plausible, and near-impossible to spot in
 the morning.
 
+**The run's first story opens through `gh pr create` with `--base` set explicitly. Every story
+after it is based on a previous story's branch, not the trunk, and ships as a Graphite stack
+by default: it runs `gt track` against that real parent, then `gt submit` to open the PR.**
+Shipping a dependent-PR wave through Graphite is the default everywhere in this repository, and
+this run's own stack is exactly that wave. Both paths still read the PR title and body only
+through the tool that consumes them at runtime, and both still go through the same PR-number
+read-back and stack-entry gates below.
+
 `FLAGGED` comes from the story-lead's §7 report `status` field, on the `ok | flagged`
 contract: `flagged` becomes the JSON boolean `true`, `ok` becomes `false` — a `parked` story
 never reaches this step at all, because §2 routes it straight to *Parking a story*. On a
@@ -740,7 +754,8 @@ RESOLVED=$(echo "$LINEAR_FACTS_JSON" | bun run "${CLAUDE_PLUGIN_ROOT}/scripts/li
 ENV_DIR=$(echo "$RESOLVED" | jq -r '.envDir // empty')
 PROJECT_DIR=$(echo "$RESOLVED" | jq -r '.projectDir // empty')
 REPO=$(echo "$RESOLVED" | jq -r '.repo // empty')
-for v in ENV_DIR PROJECT_DIR REPO; do
+BASE_BRANCH=$(echo "$RESOLVED" | jq -r '.baseBranch // empty')
+for v in ENV_DIR PROJECT_DIR REPO BASE_BRANCH; do
   val="${!v}"
   [ -n "$val" ] && [ "$val" != "null" ] || { echo "FATAL: $v is empty or null after validation — refusing."; exit 1; }
 done
@@ -763,12 +778,39 @@ BASE=$(printf '%s' "${BASE_JSON:-null}" | jq -r 'if (type=="object" and .ok==tru
 
 # Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and
 # `--body-file` reads it inside `gh`, so no report text is ever part of this command line.
+# A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the
+# run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch
+# is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`:
+# `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens
+# (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and
+# `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever
+# part of a command line either way.
+if [ "$BASE" = "$BASE_BRANCH" ]; then
 PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE") \
   || { echo "NO_PR: gh pr create failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+else
+# `gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a
+# subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this
+# fence uses, never `$PWD` on its own. `assert-chain` above already confirmed `$BASE` (this
+# story's real parent) is an ancestor branch that exists, so `gt track` is only ever told a
+# parent this fence has already verified.
+git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
+  || { echo "NO_PR: could not check out $BRANCH to track it with Graphite — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+( cd "$PROJECT_DIR" && gt track --parent "$BASE" ) \
+  || { echo "NO_PR: gt track refused — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+( cd "$PROJECT_DIR" && gt submit --no-edit --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" ) \
+  || { echo "NO_PR: gt submit failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+# `gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same
+# way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the
+# PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly
+# as strictly as a `gh`-opened one.
+PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \
+  || { echo "PR_UNRECORDED: gt submit opened the PR but it could not be read back — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+fi
 
 # --- pr number shape gate --------------------------------------------------------------------
 # Never `basename "$PR_URL"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.
-PR=$(gh pr view "$PR_URL" --repo "$REPO" --json number -q .number) || { echo "PR_UNRECORDED: gh pr create left no readable PR number — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+PR=$(gh pr view "$PR_URL" --repo "$REPO" --json number -q .number) || { echo "PR_UNRECORDED: the PR opened above left no readable PR number — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 case "$PR" in ''|*[!0-9]*) echo "PR_UNRECORDED: PR number is not digits-only — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1;; esac
 [ "$PR" -gt 0 ] || { echo "PR_UNRECORDED: PR number is not a positive integer — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 # --- end pr number shape gate -----------------------------------------------------------------
@@ -802,9 +844,11 @@ one has its own prefix in the fence's output, and every refusal carries exactly 
 `NO_PR:` is Outcome A, `PR_UNRECORDED:` is Outcome C, `PR_OPENED:` is Outcome B.
 
 **Outcome A — no PR could be opened (halt, distinct from flagged).** A refusal at any of the
-three required checks — assert-chain refusing, resolve-base refusing, or `gh pr create`
-itself failing — means the chain has no anchor to stack the next story on. This is never the
-flagged case: go to *Parking a story*, with `parked_reason` naming which call refused.
+three required checks — assert-chain refusing, resolve-base refusing, or the PR-opening call
+itself failing (`gh pr create` for the first story of a run, or `gt track` / `gt submit` for a
+stacked story based on a previous story's branch) — means the chain has no anchor to stack the
+next story on. This is never the flagged case: go to *Parking a story*, with `parked_reason`
+naming which call refused.
 
 **Outcome B — the PR opened.** Record `{story, branch, pr, base, flagged}` in the run state's
 `stack` array — `pr` as a JSON number (a positive integer, never the string form) and
@@ -812,8 +856,8 @@ flagged case: go to *Parking a story*, with `parked_reason` naming which call re
 closing `assert-chain` re-read proves round-trips, then continue to §5.
 
 **Outcome C — the PR opened but the run state does not record it (halt).** Every refusal after
-`gh pr create` returns — an unreadable or non-integer PR number, a `FLAGGED` that is not a JSON
-literal, an entry that cannot be built, appended, or written, or a round-trip that fails — is
+the PR-opening call returns — an unreadable or non-integer PR number, a `FLAGGED` that is not a
+JSON literal, an entry that cannot be built, appended, or written, or a round-trip that fails — is
 prefixed `PR_UNRECORDED:` and leaves a real pull request open with nothing in the `stack` array
 pointing at it. It is not Outcome A: no `NO_PR:` line is printed, because a PR exists. Go to
 *Parking a story*, and make `parked_reason` say that the PR is open and unrecorded, with its
