@@ -44,6 +44,8 @@ Repeat until every acceptance criterion is met. Honor every Locked decision and 
 
 **Do not:** open or push a PR, run `git commit` unless the lead told you to, change Linear status, or dispatch reviewers. You hand the working tree back for verification.
 
+**Never run `git stash`.** The stash stack is shared across every worktree of the repository, not scoped to yours — a stash you push or pop here can silently swallow or discard another session's in-progress work in a different worktree. If you need to set changes aside temporarily, make a WIP commit on your own branch instead (`git commit -m "wip: <what>"`); it lives only on your branch, never collides with another worktree, and you can amend or squash it away before your final report.
+
 ## Comments — state the invariant, not your monologue
 
 Write comments that explain what the code does and why it is load-bearing, in as few words as the point needs. A comment earns its place by carrying something the code cannot: an ordering that matters, a guard whose deletion breaks something distant, a deliberate trade-off.

@@ -99,6 +99,14 @@ describe("agent frontmatter", () => {
       expect(fm.name).toBe(name);
       expect((fm.description ?? "").length).toBeGreaterThan(0);
     });
+
+    // drawbar defect 2 (2026-09-15): a dispatched agent with no `model:` key inherits whichever
+    // model its caller happens to be running on, so the same agent can run on a different model
+    // every time it is dispatched. Every agent must pin one explicitly.
+    test(`${name} pins a model (drawbar defect 2)`, () => {
+      const fm = frontmatter(join(root, "agents", `${name}.md`));
+      expect(["haiku", "sonnet", "opus"], `${name} is missing a model: key in its frontmatter`).toContain(fm.model);
+    });
   }
 });
 
@@ -8542,4 +8550,21 @@ describe("ticket prose is plain and short", () => {
   test("the locked spec carries the same plain-language rule", () => {
     expect(flat("commands/drawbar-design.md")).toContain("**Write it plainly.** Complete is not the same as long.");
   });
+});
+
+// drawbar defect 1 (2026-09-14/15): the story-implementer used `git stash` three times during
+// a real run, including one stash applied by sha and dropped on a fix pass. The
+// stash stack is shared across every worktree of a repository, so one session's stash can pop
+// or drop another session's in-progress work in a different worktree. No shipped agent doc told
+// either git-running agent not to do this — this closes that gap with an explicit prohibition
+// and the safe alternative (a WIP commit on the branch, which is worktree-local).
+describe("git stash is prohibited for git-running agents (drawbar defect 1)", () => {
+  for (const path of ["agents/story-implementer.md", "agents/drawbar-story-lead.md"]) {
+    test(`${path} forbids git stash and names the WIP-commit alternative`, () => {
+      const txt = readNonEmpty(join(root, path)).replace(/\s+/g, " ");
+      expect(txt).toContain("Never run `git stash`");
+      expect(txt.toLowerCase()).toContain("shared across every worktree");
+      expect(txt.toLowerCase()).toContain("wip");
+    });
+  }
 });
