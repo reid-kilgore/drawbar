@@ -146,6 +146,12 @@ green, commit it. Reverting a mutation with `git checkout -- <file>` against unc
 work destroys it irrecoverably — this has already cost 145 lines of a subagent's work in a
 real run.
 
+**Never run `git stash`, and never instruct the implementer to.** The stash stack is shared
+across every worktree of the repository, not scoped to yours — a stash pushed or popped here
+can silently swallow or discard another session's in-progress work in a different worktree.
+Where you need to set changes aside temporarily, use a WIP commit on the branch instead
+(`git commit -m "wip: <what>"`); it is worktree-local and safe.
+
 ## 3. Verification gate
 
 Read the report *and* the diff. Confirm the RED runs were shown, not claimed. Re-run the

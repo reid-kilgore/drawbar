@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
 import { validateEntry } from "./lib/schema";
-import { appendEntry, readEntries, archiveOlderThan, compactActive, ensureDir } from "./lib/store";
+import { appendEntry, readEntries, archiveOlderThan, archiveByKeys, compactActive, ensureDir } from "./lib/store";
 import { buildIndex, recall, type RecallFilters } from "./lib/fts";
 import { resolveContext, type DrawbarContext, type ResolveInput } from "./lib/project-config";
 import type { Runner } from "./lib/ship-config";
@@ -60,8 +60,34 @@ async function readStdin(): Promise<string> {
 // somewhere else". Every other command is about to touch the store, so it gets `ensureDir`.
 const READ_ONLY_COMMANDS: readonly string[] = ["context", "path"];
 
+const GENERAL_USAGE = "usage: kb <add|recall|reindex|stats|archive|compact|import|context|path> [--dir <path>] [...]";
+
+const USAGE: Readonly<Record<string, string>> = {
+  add: "usage: kb add [--dir <path>] [--project <name>]\n  Reads one JSON entry from stdin and appends it to the store.",
+  recall: "usage: kb recall <query> [--dir <path>] [--type <type>] [--tag <tag>] [--file <file>] [--since <n>] [--limit <n>] [--json] [--all]",
+  reindex: "usage: kb reindex [--dir <path>]",
+  stats: "usage: kb stats [--dir <path>] [--json]",
+  archive: "usage: kb archive [--dir <path>] (--key <key> | --days <n>)\n  --key archives exactly that entry; --days archives entries older than n days.\n  Exactly one of --key or --days is required — archive refuses to run with neither.",
+  compact: "usage: kb compact [--dir <path>] [--dry-run]",
+  import: "usage: kb import <path> [--dir <path>]",
+  context: "usage: kb context [--dir <path>] [--json]",
+  path: "usage: kb path [--dir <path>]",
+};
+
+function usageFor(cmd: string | undefined): string {
+  return (cmd && USAGE[cmd]) ?? GENERAL_USAGE;
+}
+
 export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
   const [cmd, ...rest] = argv;
+
+  // --help/-h must never touch the store: printed before ensureDir/resolveContext run, and
+  // before any subcommand's own logic (e.g. `add` reading stdin) has a chance to act.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(usageFor(cmd) + "\n");
+    return 0;
+  }
+
   const { positionals, flags } = parseFlags(rest);
 
   if (flags.dir === true) { process.stderr.write("--dir requires a value\n"); return 1; }
@@ -166,14 +192,38 @@ export async function run(argv: string[], deps: RunDeps = {}): Promise<number> {
       return 0;
     }
     case "archive": {
-      let days = 90;
+      if (flags.key === true) { process.stderr.write("archive: --key requires a value\n"); return 1; }
       if (flags.days === true) { process.stderr.write("archive: --days requires a value\n"); return 1; }
-      if (typeof flags.days === "string") {
-        const n = parseNonNegInt(flags.days);
-        if (n === null) { process.stderr.write("archive: --days must be a non-negative integer (digits only)\n"); return 1; }
-        days = n;
+      const hasKey = typeof flags.key === "string";
+      const hasDays = typeof flags.days === "string";
+
+      if (hasKey && hasDays) {
+        process.stderr.write("archive: --key and --days are mutually exclusive — pass exactly one\n");
+        return 1;
       }
-      const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+
+      if (hasKey) {
+        const res = archiveByKeys(dir, [flags.key as string]);
+        if (res.missing.length > 0) {
+          process.stderr.write(`archive: key not found, archiving nothing: ${res.missing.join(", ")}\n`);
+          return 1;
+        }
+        buildIndex(dir);
+        process.stdout.write(JSON.stringify(res) + "\n");
+        return 0;
+      }
+
+      // Neither --key nor --days: refuse rather than bulk-archive under a silent default. A
+      // session on 2026-09-15 ran `archive` meaning to remove one entry and archived ten
+      // instead, restored by hand — refusing forces the caller to say what they mean.
+      if (!hasDays) {
+        process.stderr.write("archive: refusing to run without --key or --days — specify one\n");
+        return 1;
+      }
+
+      const n = parseNonNegInt(flags.days as string);
+      if (n === null) { process.stderr.write("archive: --days must be a non-negative integer (digits only)\n"); return 1; }
+      const cutoff = Math.floor(Date.now() / 1000) - n * 86400;
       const res = archiveOlderThan(dir, cutoff);
       buildIndex(dir);
       process.stdout.write(JSON.stringify(res) + "\n");

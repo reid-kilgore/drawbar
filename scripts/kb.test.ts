@@ -82,7 +82,7 @@ describe("run (in-process)", () => {
     expect(readEntries(dir).map((e) => e.key)).toEqual(["recent"]);
   });
 
-  test("archive with no --days defaults to 90 days (PCO-339)", async () => {
+  test("archive with --days 90 explicitly passed still archives only entries older than 90 days (PCO-339)", async () => {
     const p = ensureDir(dir);
     const old = Math.floor(Date.now() / 1000) - 100 * 86400;
     const recent = Math.floor(Date.now() / 1000) - 10 * 86400;
@@ -93,8 +93,24 @@ describe("run (in-process)", () => {
         JSON.stringify({ key: "recent", type: "fact", content: "recent1", source: "user", tags: [], ts: recent, issue: null, files: [] }),
       ].join("\n") + "\n",
     );
-    expect(await run(["archive", "--dir", dir])).toBe(0);
+    expect(await run(["archive", "--dir", dir, "--days", "90"])).toBe(0);
     expect(readEntries(dir).map((e) => e.key)).toEqual(["recent"]);
+  });
+
+  // PCO-defect-3 (2026-09-15): archive with neither --key nor --days used to default to a
+  // 90-day bulk archive silently. A session that meant to archive one entry got 10 archived
+  // and had to restore them by hand. Refusing forces the caller to say which entries they mean.
+  test("archive with neither --key nor --days is refused, archives nothing (drawbar defect 3)", async () => {
+    const p = ensureDir(dir);
+    const old = Math.floor(Date.now() / 1000) - 100 * 86400;
+    writeFileSync(
+      p.active,
+      [JSON.stringify({ key: "old", type: "fact", content: "old1", source: "user", tags: [], ts: old, issue: null, files: [] })].join("\n") + "\n",
+    );
+    const code = await run(["archive", "--dir", dir]);
+    expect(code).toBe(1);
+    expect(readEntries(dir).length).toBe(1);
+    expect(readArchiveEntries(dir).length).toBe(0);
   });
 
   test("archive --days with no value is rejected, not silently defaulted to 90 (PCO-339 F1)", async () => {
@@ -281,5 +297,104 @@ describe("cli (subprocess, real stdin)", () => {
     const { err } = await cli(["recall", "x", "--dir", dir, "--limit", "2.7"]);
     expect(err).toContain("non-negative integer");
     expect(err).not.toContain("non-negative number");
+  });
+
+  // drawbar defect 3 (2026-09-15): `archive --key <key>` used to be silently ignored and fall
+  // through to the days-based bulk archive, so a session meaning to archive one entry archived
+  // ten. `--key` must archive exactly the named entry and nothing else.
+  test("archive --key archives exactly that entry, leaving the rest active (drawbar defect 3)", async () => {
+    const p = ensureDir(dir);
+    const now = Math.floor(Date.now() / 1000);
+    writeFileSync(
+      p.active,
+      [
+        JSON.stringify({ key: "a", type: "fact", content: "a1", source: "user", tags: [], ts: now, issue: null, files: [] }),
+        JSON.stringify({ key: "b", type: "fact", content: "b1", source: "user", tags: [], ts: now, issue: null, files: [] }),
+        JSON.stringify({ key: "c", type: "fact", content: "c1", source: "user", tags: [], ts: now, issue: null, files: [] }),
+      ].join("\n") + "\n",
+    );
+    const { code, out } = await cli(["archive", "--dir", dir, "--key", "b"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual({ archived: 1, keys: ["b"], missing: [] });
+    expect(readEntries(dir).map((e) => e.key).sort()).toEqual(["a", "c"]);
+    expect(readArchiveEntries(dir).map((e) => e.key)).toEqual(["b"]);
+  });
+
+  test("archive --key for a key that does not exist fails with a clear error and archives nothing (drawbar defect 3)", async () => {
+    const p = ensureDir(dir);
+    writeFileSync(
+      p.active,
+      [JSON.stringify({ key: "a", type: "fact", content: "a1", source: "user", tags: [], ts: 1, issue: null, files: [] })].join("\n") + "\n",
+    );
+    const { code, err } = await cli(["archive", "--dir", dir, "--key", "nope"]);
+    expect(code).toBe(1);
+    expect(err).toContain("nope");
+    expect(readEntries(dir).map((e) => e.key)).toEqual(["a"]);
+    expect(readArchiveEntries(dir).length).toBe(0);
+  });
+
+  test("archive --key with no value is rejected, not silently ignored (drawbar defect 3)", async () => {
+    const { code, err } = await cli(["archive", "--dir", dir, "--key"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--key");
+  });
+
+  test("archive --key and --days together are rejected as ambiguous (drawbar defect 3)", async () => {
+    const { code, err } = await cli(["archive", "--dir", dir, "--key", "a", "--days", "30"]);
+    expect(code).toBe(1);
+    expect(err).toContain("--key");
+    expect(err).toContain("--days");
+  });
+
+  // drawbar defect 4 (2026-09-15): `drawbar-kb archive --help` ran a real archive instead of
+  // printing usage. --help (and -h) must print usage and exit 0 without touching the store,
+  // for archive and for every other subcommand.
+  test("archive --help prints usage and exits 0 without archiving anything (drawbar defect 4)", async () => {
+    const p = ensureDir(dir);
+    const old = Math.floor(Date.now() / 1000) - 100 * 86400;
+    writeFileSync(
+      p.active,
+      [JSON.stringify({ key: "old", type: "fact", content: "old1", source: "user", tags: [], ts: old, issue: null, files: [] })].join("\n") + "\n",
+    );
+    const { code, out } = await cli(["archive", "--dir", dir, "--help"]);
+    expect(code).toBe(0);
+    expect(out.toLowerCase()).toContain("usage");
+    expect(readEntries(dir).length).toBe(1);
+    expect(readArchiveEntries(dir).length).toBe(0);
+  });
+
+  test("archive -h prints usage and exits 0 without archiving anything (drawbar defect 4)", async () => {
+    const p = ensureDir(dir);
+    const old = Math.floor(Date.now() / 1000) - 100 * 86400;
+    writeFileSync(
+      p.active,
+      [JSON.stringify({ key: "old", type: "fact", content: "old1", source: "user", tags: [], ts: old, issue: null, files: [] })].join("\n") + "\n",
+    );
+    const { code, out } = await cli(["archive", "--dir", dir, "-h"]);
+    expect(code).toBe(0);
+    expect(out.toLowerCase()).toContain("usage");
+    expect(readEntries(dir).length).toBe(1);
+  });
+
+  test("add --help prints usage and exits 0 without reading stdin or writing an entry (drawbar defect 4)", async () => {
+    const { code, out } = await cli(["add", "--dir", dir, "--help"]);
+    expect(code).toBe(0);
+    expect(out.toLowerCase()).toContain("usage");
+    expect(readEntries(dir).length).toBe(0);
+  });
+
+  test("compact --help prints usage and exits 0 without compacting (drawbar defect 4)", async () => {
+    const p = ensureDir(dir);
+    writeFileSync(
+      p.active,
+      [
+        JSON.stringify({ key: "a", type: "fact", content: "a1", source: "user", tags: [], ts: 1, issue: null, files: [] }),
+        JSON.stringify({ key: "a", type: "fact", content: "a2", source: "user", tags: [], ts: 2, issue: null, files: [] }),
+      ].join("\n") + "\n",
+    );
+    const { code, out } = await cli(["compact", "--dir", dir, "--help"]);
+    expect(code).toBe(0);
+    expect(out.toLowerCase()).toContain("usage");
+    expect(readEntries(dir).map((e) => e.content)).toEqual(["a1", "a2"]);
   });
 });
