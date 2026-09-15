@@ -798,14 +798,35 @@ git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
   || { echo "NO_PR: could not check out $BRANCH to track it with Graphite — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
 ( cd "$PROJECT_DIR" && gt track --parent "$BASE" ) \
   || { echo "NO_PR: gt track refused — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
-( cd "$PROJECT_DIR" && gt submit --no-edit --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" ) \
+# `gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no
+# `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`,
+# `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description`
+# and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still
+# opens or updates the PR — with a title and description Graphite derives from the branch's
+# commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit`
+# immediately below overwrites both with those same two files, the same source `gh pr create`
+# reads from in the other arm. Both arms default to a non-draft PR: `gt submit` defaults
+# `--draft` to false exactly as an unflagged `gh pr create` does, so no `--draft` flag is needed
+# on either side to keep them matched.
+( cd "$PROJECT_DIR" && gt submit --no-edit ) \
   || { echo "NO_PR: gt submit failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \
+  || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 # `gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same
 # way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the
 # PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly
 # as strictly as a `gh`-opened one.
 PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \
   || { echo "PR_UNRECORDED: gt submit opened the PR but it could not be read back — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+# `gh pr edit` returning success is not proof its write landed with this exact content — read the
+# body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the
+# content this arm wrote can never silently diverge from what the file on disk actually held.
+PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
+  || { echo "PR_UNRECORDED: the PR body could not be read back to confirm it — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+case "$PR_BODY_CHECK" in
+  "reviewed at "*) ;;
+  *) echo "PR_UNRECORDED: the PR body does not start with the expected first line after gh pr edit — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1;;
+esac
 fi
 
 # --- pr number shape gate --------------------------------------------------------------------

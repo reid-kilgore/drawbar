@@ -2130,7 +2130,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
       "CONFIG", "CONFIG_REAL", "RESOLVED", "ENV_DIR", "PROJECT_DIR", "REPO", "BASE_BRANCH", "STATE",
       "CHAIN_JSON", "CHAIN_OK", "CHAIN_REASON",
       "BASE_JSON", "BASE", "BASE_REASON",
-      "PR", "ENTRY", "NEXT_STATE",
+      "PR", "PR_BODY_CHECK", "ENTRY", "NEXT_STATE",
       "VERIFY_JSON", "VERIFY_OK", "VERIFY_REASON",
     ];
     for (const name of DERIVED) {
@@ -2162,6 +2162,42 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     );
     expect(oneLine(elseArm, "PR_URL=", "the fork's `else` arm")).toBe(
       'PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \\',
+    );
+  });
+
+  // MAESTRO review (drawbar PR #1, 2026-09-15): `gt submit --help` on the real CLI (checked
+  // against version 1.8.6) supports only -d/--draft, -p/--publish, -e/--edit, -n/--no-edit,
+  // --edit-title/--no-edit-title, --edit-description/--no-edit-description and -u/--update-only —
+  // no --title and no --body-file. A prior version of this fence passed both anyway, which would
+  // have failed this call outright for every stacked story. Pinned here so a flag `gt` does not
+  // support cannot come back into this line unnoticed.
+  test("the fork's `else` arm invokes `gt submit` with only flags the real CLI supports, and sets the title/body through `gh pr edit` instead", () => {
+    const c = code();
+    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
+    const forkElse = c.indexOf("\nelse\n", forkStart);
+    const forkEnd = c.indexOf("\nfi\n", forkElse);
+    const elseArm = c.slice(forkElse, forkEnd);
+    const GT_SUBMIT_SUPPORTED_FLAGS = new Set([
+      "-d", "--draft", "-p", "--publish", "-e", "--edit", "-n", "--no-edit",
+      "--edit-title", "--no-edit-title", "--edit-description", "--no-edit-description",
+      "-u", "--update-only",
+    ]);
+    const submitLines = elseArm.split("\n").filter((l) => l.startsWith("( cd ") && l.includes("gt submit"));
+    expect(submitLines.length, "expected exactly one line invoking gt submit").toBe(1);
+    const submitLine = submitLines[0]!;
+    for (const flag of submitLine.matchAll(/(?<=\s)(--?[a-z][a-z-]*)/g)) {
+      if (flag[1] === "cd") continue;
+      expect(
+        GT_SUBMIT_SUPPORTED_FLAGS.has(flag[1]!),
+        `gt submit invocation passes '${flag[1]}', which \`gt submit --help\` does not list as a supported flag: ${submitLine}`,
+      ).toBe(true);
+    }
+    expect(submitLine, "gt submit must not take --title or --body-file — it has neither flag").not.toMatch(/--title|--body-file/);
+    // The title and body this arm actually needs come from `gh pr edit` instead, reading the
+    // same two files the other arm's `gh pr create` reads.
+    const editLine = oneLine(elseArm, "gh pr edit ", "the fork's `else` arm's gh pr edit invocation");
+    expect(editLine).toBe(
+      'gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \\',
     );
   });
 
@@ -3205,16 +3241,18 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     // contributes one more for the run's first story (`gh pr create` failing) — or three for
     // every story after it, whose Graphite path has three failure points before a PR exists
     // (`git checkout`, `gt track`, `gt submit`), one NO_PR site each. Once `gt submit` has
-    // actually opened the PR, a failure to read it back is Outcome C like any other
-    // post-open failure, not Outcome A — so that site is `PR_UNRECORDED:`, not `NO_PR:`. Total:
-    // 1 (assert-chain) + 1 (resolve-base) + 1 (gh pr create) + 3 (checkout/track/submit) = 6.
+    // actually opened the PR, every later failure is Outcome C like any other post-open
+    // failure, not Outcome A — `gh pr edit` failing, the PR-URL read-back failing, the PR-body
+    // read-back failing, and the PR body not carrying its expected first line, are all
+    // `PR_UNRECORDED:`, not `NO_PR:`. Total NO_PR: 1 (assert-chain) + 1 (resolve-base) + 1
+    // (gh pr create) + 3 (checkout/track/submit) = 6.
     const noPr = [...c.matchAll(/echo "NO_PR: [^"]*"/g)].map((m) => m[0]);
     expect(noPr.length, "NO_PR: must mark exactly the required pre-PR checks of Outcome A").toBe(6);
     for (const site of noPr) {
       expect(site, `a NO_PR: site claims a PR is open — that is Outcome C: ${site}`).not.toContain("PR is open");
     }
     const unrecorded = [...c.matchAll(/echo "PR_UNRECORDED: [^"]*"/g)].map((m) => m[0]);
-    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(9);
+    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(12);
     for (const site of unrecorded) {
       expect(site, `an Outcome C site does not say the PR is open: ${site}`).toContain(
         "— the PR is open; park the story with that reason (Outcome C) and repair the run state by hand.",
@@ -7649,7 +7687,9 @@ const SH4_FENCE_COMMENTS: readonly string[] = [
     "Check 2 of 3 — the base. Locked A: `resolve-base` is the only producer of this value.",
     "Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and `--body-file` reads it inside `gh`, so no report text is ever part of this command line. A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`: `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever part of a command line either way.",
     "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. `assert-chain` above already confirmed `$BASE` (this story's real parent) is an ancestor branch that exists, so `gt track` is only ever told a parent this fence has already verified.",
+    "`gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`, `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description` and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still opens or updates the PR — with a title and description Graphite derives from the branch's commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit` immediately below overwrites both with those same two files, the same source `gh pr create` reads from in the other arm. Both arms default to a non-draft PR: `gt submit` defaults `--draft` to false exactly as an unflagged `gh pr create` does, so no `--draft` flag is needed on either side to keep them matched.",
     "`gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly as strictly as a `gh`-opened one.",
+    "`gh pr edit` returning success is not proof its write landed with this exact content — read the body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the content this arm wrote can never silently diverge from what the file on disk actually held.",
     "--- pr number shape gate --------------------------------------------------------------------",
     "Never `basename \"$PR_URL\"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.",
     "--- end pr number shape gate -----------------------------------------------------------------",
