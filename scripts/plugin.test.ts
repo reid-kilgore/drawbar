@@ -1746,8 +1746,9 @@ describe("PCO-366 R3: ship §4/§5 — open the stacked PR, leave In Progress, p
     expect(s4()).toContain(
       "**Outcome A — no PR could be opened (halt, distinct from flagged).** A refusal at any " +
         "of the three required checks — assert-chain refusing, resolve-base refusing, or " +
-        "`gh pr create` itself failing — means the chain has no anchor to stack the next " +
-        "story on.",
+        "the PR-opening call itself failing (`gh pr create` for the first story of a run, or " +
+        "`gt track` / `gt submit` for a stacked story based on a previous story's branch) — " +
+        "means the chain has no anchor to stack the next story on.",
     );
   });
 
@@ -1776,8 +1777,8 @@ describe("PCO-366 R3: ship §4/§5 — open the stacked PR, leave In Progress, p
   test("§4's Outcome C covers 'the PR opened but the run state does not record it', and forbids a retry", () => {
     expect(s4()).toContain(
       "**Outcome C — the PR opened but the run state does not record it (halt).** Every " +
-        "refusal after `gh pr create` returns — an unreadable or non-integer PR number, a " +
-        "`FLAGGED` that is not a JSON literal, an entry that cannot be built, appended, or " +
+        "refusal after the PR-opening call returns — an unreadable or non-integer PR number, " +
+        "a `FLAGGED` that is not a JSON literal, an entry that cannot be built, appended, or " +
         "written, or a round-trip that fails — is prefixed `PR_UNRECORDED:` and leaves a real " +
         "pull request open with nothing in the `stack` array pointing at it. It is not Outcome " +
         "A: no `NO_PR:` line is printed, because a PR exists. Go to *Parking a story*, and make " +
@@ -2126,16 +2127,78 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     const DERIVED = [
       "ARG", "STORY", "BRANCH", "FLAGGED", "LINEAR_FACTS_JSON",
       "IN_DIR", "INPUTS", "BRANCH_FILE", "PR_TITLE_FILE", "PR_BODY_FILE",
-      "CONFIG", "CONFIG_REAL", "RESOLVED", "ENV_DIR", "PROJECT_DIR", "REPO", "STATE",
+      "CONFIG", "CONFIG_REAL", "RESOLVED", "ENV_DIR", "PROJECT_DIR", "REPO", "BASE_BRANCH", "STATE",
       "CHAIN_JSON", "CHAIN_OK", "CHAIN_REASON",
       "BASE_JSON", "BASE", "BASE_REASON",
-      "PR_URL", "PR", "ENTRY", "NEXT_STATE",
+      "PR", "PR_BODY_CHECK", "ENTRY", "NEXT_STATE",
       "VERIFY_JSON", "VERIFY_OK", "VERIFY_REASON",
     ];
     for (const name of DERIVED) {
       const hits = [...c.matchAll(new RegExp(`(?:^|[\\s;{(])${name}=`, "gm"))];
       expect(hits.length, `${name} must be assigned exactly once in §4's fence, found ${hits.length}`).toBe(1);
     }
+  });
+
+  // PR_URL is the one exception to "assigned exactly once": the run's first story opens through
+  // `gh pr create` directly, and every story after it opens through Graphite instead (`gt track`
+  // then `gt submit`), reading the PR back with `gh pr view` because `gt submit` hands back no
+  // URL of its own. The two assignments live in mutually exclusive arms of one `if`/`else` keyed
+  // on `$BASE` vs `$BASE_BRANCH`, so exactly one of them ever executes — pinned here as "exactly
+  // two, both inside that fork" rather than relaxed to "any number".
+  test("PR_URL is assigned exactly twice, once in each arm of the gh/Graphite fork", () => {
+    const c = code();
+    const hits = [...c.matchAll(/(?:^|[\s;{(])PR_URL=/gm)];
+    expect(hits.length, `PR_URL must be assigned exactly twice (once per arm of the gh/Graphite fork), found ${hits.length}`).toBe(2);
+    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
+    const forkElse = c.indexOf("\nelse\n", forkStart);
+    const forkEnd = c.indexOf("\nfi\n", forkElse);
+    expect(forkStart, "the gh/Graphite fork's `if` was not found").toBeGreaterThan(-1);
+    expect(forkElse, "the gh/Graphite fork's `else` was not found").toBeGreaterThan(forkStart);
+    expect(forkEnd, "the gh/Graphite fork's `fi` was not found").toBeGreaterThan(forkElse);
+    const thenArm = c.slice(forkStart, forkElse);
+    const elseArm = c.slice(forkElse, forkEnd);
+    expect(oneLine(thenArm, "PR_URL=", "the fork's `then` arm")).toBe(
+      'PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE") \\',
+    );
+    expect(oneLine(elseArm, "PR_URL=", "the fork's `else` arm")).toBe(
+      'PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \\',
+    );
+  });
+
+  // MAESTRO review (drawbar PR #1, 2026-09-15): `gt submit --help` on the real CLI (checked
+  // against version 1.8.6) supports only -d/--draft, -p/--publish, -e/--edit, -n/--no-edit,
+  // --edit-title/--no-edit-title, --edit-description/--no-edit-description and -u/--update-only —
+  // no --title and no --body-file. A prior version of this fence passed both anyway, which would
+  // have failed this call outright for every stacked story. Pinned here so a flag `gt` does not
+  // support cannot come back into this line unnoticed.
+  test("the fork's `else` arm invokes `gt submit` with only flags the real CLI supports, and sets the title/body through `gh pr edit` instead", () => {
+    const c = code();
+    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
+    const forkElse = c.indexOf("\nelse\n", forkStart);
+    const forkEnd = c.indexOf("\nfi\n", forkElse);
+    const elseArm = c.slice(forkElse, forkEnd);
+    const GT_SUBMIT_SUPPORTED_FLAGS = new Set([
+      "-d", "--draft", "-p", "--publish", "-e", "--edit", "-n", "--no-edit",
+      "--edit-title", "--no-edit-title", "--edit-description", "--no-edit-description",
+      "-u", "--update-only",
+    ]);
+    const submitLines = elseArm.split("\n").filter((l) => l.startsWith("( cd ") && l.includes("gt submit"));
+    expect(submitLines.length, "expected exactly one line invoking gt submit").toBe(1);
+    const submitLine = submitLines[0]!;
+    for (const flag of submitLine.matchAll(/(?<=\s)(--?[a-z][a-z-]*)/g)) {
+      if (flag[1] === "cd") continue;
+      expect(
+        GT_SUBMIT_SUPPORTED_FLAGS.has(flag[1]!),
+        `gt submit invocation passes '${flag[1]}', which \`gt submit --help\` does not list as a supported flag: ${submitLine}`,
+      ).toBe(true);
+    }
+    expect(submitLine, "gt submit must not take --title or --body-file — it has neither flag").not.toMatch(/--title|--body-file/);
+    // The title and body this arm actually needs come from `gh pr edit` instead, reading the
+    // same two files the other arm's `gh pr create` reads.
+    const editLine = oneLine(elseArm, "gh pr edit ", "the fork's `else` arm's gh pr edit invocation");
+    expect(editLine).toBe(
+      'gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \\',
+    );
   });
 
   test("CRITICAL 3: the not-empty / not-\"null\" assert loop covers the WHOLE derived set, per variable", () => {
@@ -2231,11 +2294,15 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
 
   // --- CRITICAL 2: report text never reaches a command line ---------------------------------
   test("CRITICAL 2: gh pr create is one literal invocation with --repo/--base/--head and --body-file", () => {
-    const line = oneLine(fence(), "PR_URL=", "§4's gh pr create invocation");
+    const c = code();
+    // The run's first story (base == the config's trunk) opens through this literal `gh pr
+    // create` line, in the fork's `then` arm — every story after it takes the `else` arm's
+    // `gt track` / `gt submit` path instead (its own test, "PR_URL is assigned exactly twice…").
+    const thenArm = c.slice(0, c.indexOf("\nelse\n"));
+    const line = oneLine(thenArm, "PR_URL=", "§4's gh pr create invocation");
     expect(line).toBe(
       'PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE") \\',
     );
-    const c = code();
     // `--body` (the inline form) must not exist anywhere: it is the one flag that would take
     // report text as an argv element.
     expect(c).not.toMatch(/--body(?!-file)\b/);
@@ -2874,7 +2941,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     // Every refusal here is AFTER `gh pr create` returned, so each one says the PR is open and
     // names Outcome C — `FATAL: … refusing.` said nothing about the pull request it left behind.
     expect(oneLine(c, "PR=$(", "§4's PR number derivation")).toBe(
-      `PR=$(gh pr view "$PR_URL" --repo "$REPO" --json number -q .number) || { echo "PR_UNRECORDED: gh pr create left no readable PR number — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }`,
+      `PR=$(gh pr view "$PR_URL" --repo "$REPO" --json number -q .number) || { echo "PR_UNRECORDED: the PR opened above left no readable PR number — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }`,
     );
     expect(c).toContain(
       `case "$PR" in ''|*[!0-9]*) echo "PR_UNRECORDED: PR number is not digits-only — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1;; esac`,
@@ -3169,18 +3236,23 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     const reasons = [...c.matchAll(/([A-Z][A-Z0-9_]*_REASON)=\$\(printf '%s' "\$\{[A-Z_]+_JSON:-null\}" \| jq -r '\.reason \/\/ "unreadable-verdict"' 2>\/dev\/null\)/g)];
     expect(reasons.length, "expected one `.reason`-only derivation per verdict-bearing refusal").toBe(3);
     // …and each refusal site maps to exactly one documented outcome, by count. `NO_PR:` is
-    // Outcome A, whose definition is "a refusal at any of the three required checks", so there are
-    // exactly THREE of them — assert-chain, resolve-base, `gh pr create`. Every refusal AFTER the
-    // PR exists is Outcome C, prefixed `PR_UNRECORDED:` and stating that the PR is open; `> 3`
-    // tolerated five NO_PR sites against three documented checks, two of them for a state in which
-    // a pull request is already open.
+    // Outcome A, whose definition is "a refusal at any of the required checks before a PR
+    // exists". assert-chain and resolve-base contribute one each; the PR-opening call
+    // contributes one more for the run's first story (`gh pr create` failing) — or three for
+    // every story after it, whose Graphite path has three failure points before a PR exists
+    // (`git checkout`, `gt track`, `gt submit`), one NO_PR site each. Once `gt submit` has
+    // actually opened the PR, every later failure is Outcome C like any other post-open
+    // failure, not Outcome A — `gh pr edit` failing, the PR-URL read-back failing, the PR-body
+    // read-back failing, and the PR body not carrying its expected first line, are all
+    // `PR_UNRECORDED:`, not `NO_PR:`. Total NO_PR: 1 (assert-chain) + 1 (resolve-base) + 1
+    // (gh pr create) + 3 (checkout/track/submit) = 6.
     const noPr = [...c.matchAll(/echo "NO_PR: [^"]*"/g)].map((m) => m[0]);
-    expect(noPr.length, "NO_PR: must mark exactly the three required checks of Outcome A").toBe(3);
+    expect(noPr.length, "NO_PR: must mark exactly the required pre-PR checks of Outcome A").toBe(6);
     for (const site of noPr) {
       expect(site, `a NO_PR: site claims a PR is open — that is Outcome C: ${site}`).not.toContain("PR is open");
     }
     const unrecorded = [...c.matchAll(/echo "PR_UNRECORDED: [^"]*"/g)].map((m) => m[0]);
-    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(8);
+    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(12);
     for (const site of unrecorded) {
       expect(site, `an Outcome C site does not say the PR is open: ${site}`).toContain(
         "— the PR is open; park the story with that reason (Outcome C) and repair the run state by hand.",
@@ -6833,6 +6905,14 @@ const SH4_PROSE: readonly string[] = [
       "A): the default would silently fall back to the repo's default branch, producing a PR " +
       "whose diff carries every earlier story's work too — green, plausible, and " +
       "near-impossible to spot in the morning.",
+    "**The run's first story opens through `gh pr create` with `--base` set explicitly. Every " +
+      "story after it is based on a previous story's branch, not the trunk, and ships as a " +
+      "Graphite stack by default: it runs `gt track` against that real parent, then `gt " +
+      "submit` to open the PR.** Shipping a dependent-PR wave through Graphite is the default " +
+      "everywhere in this repository, and this run's own stack is exactly that wave. Both " +
+      "paths still read the PR title and body only through the tool that consumes them at " +
+      "runtime, and both still go through the same PR-number read-back and stack-entry gates " +
+      "below.",
     "`FLAGGED` comes from the story-lead's §7 report `status` field, on the `ok | flagged` " +
       "contract: `flagged` becomes the JSON boolean `true`, `ok` becomes `false` — a `parked` " +
       "story never reaches this step at all, because §2 routes it straight to *Parking a " +
@@ -7605,7 +7685,11 @@ const SH4_FENCE_COMMENTS: readonly string[] = [
     "Check 1 of 3 — chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh validate above, never from the state file's own `resolved_config` copy.",
     "Echo the verdict's `.reason` and NOTHING else. `.detail` carries absolute paths and the real repo slug, this repo is public, and the Hard rules require refusal text be paraphrased rather than pasted into `parked_reason`, the §5 comment, or a KB entry.",
     "Check 2 of 3 — the base. Locked A: `resolve-base` is the only producer of this value.",
-    "Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and `--body-file` reads it inside `gh`, so no report text is ever part of this command line.",
+    "Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and `--body-file` reads it inside `gh`, so no report text is ever part of this command line. A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`: `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever part of a command line either way.",
+    "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. `assert-chain` above already confirmed `$BASE` (this story's real parent) is an ancestor branch that exists, so `gt track` is only ever told a parent this fence has already verified.",
+    "`gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`, `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description` and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still opens or updates the PR — with a title and description Graphite derives from the branch's commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit` immediately below overwrites both with those same two files, the same source `gh pr create` reads from in the other arm. Both arms default to a non-draft PR: `gt submit` defaults `--draft` to false exactly as an unflagged `gh pr create` does, so no `--draft` flag is needed on either side to keep them matched.",
+    "`gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly as strictly as a `gh`-opened one.",
+    "`gh pr edit` returning success is not proof its write landed with this exact content — read the body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the content this arm wrote can never silently diverge from what the file on disk actually held.",
     "--- pr number shape gate --------------------------------------------------------------------",
     "Never `basename \"$PR_URL\"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.",
     "--- end pr number shape gate -----------------------------------------------------------------",
