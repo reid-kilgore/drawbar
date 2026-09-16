@@ -22,6 +22,21 @@ The default anchors to the **main worktree root** (the parent of the shared `.gi
 
 Whether the store is committed is the project's choice: leave `memoryDir` unset to keep it at the repo root where it can be tracked, or point it outside the repo to keep it local to the machine.
 
+**A wrong store answers with less; it does not fail.** Every wrong path in this resolution order returns success and fewer entries, so the error arrives as a conclusion about somebody's work rather than as an error. Three ways to land on one: pass the knowledge REPOSITORY root where the store path is wanted, and the directory holds no `knowledge.jsonl` at all, so it reports zero active; let the default resolve in a project that has its own small store, and recall answers from that instead; or run a bare command in a worktree and get a different store again. Observed on 2026-09-16, three paths on one machine: 1572 entries, zero, and 39.
+
+The cost is not a missed lookup. One session's ticket named three MUST-CHECK keys, all three read as absent under the wrong directory, and the obvious conclusion was that the ticket had been careless; all three existed under the right one. Another session rescued three entries out of a project-local store and could as easily have moved them from one place nothing reads to another.
+
+So verify by **entry count**, not by a command exiting zero:
+
+```bash
+wc -l "$KB/knowledge.jsonl"                 # the real store is the big one
+jq -r --arg k "<key>" 'select(.key==$k)|.key' "$KB/knowledge.jsonl" | wc -l
+```
+
+A store answering with tens of entries where the project has hundreds is the wrong store, whatever the command reported. Re-test a negative before it becomes a claim about someone's work: "recall found nothing" and "the knowledge base does not cover this" are the two sentences that need the count beside them.
+
+This is one instance of a pattern worth recognising elsewhere: a system that answers confidently while telling you nothing. On 2026-09-16 a single stack produced four, and the review one arrived three separate ways — a green bot check because auto-review is disabled on a base other than the default branch, a green bot check because the bot was rate limited, and a green suite check because path filters skipped the suites on that same non-default base. Knowing only the first cause is worse than knowing none, because the rate-limited green then reads as a pass. Add the mergeable flag on a child whose parent has moved, and a store resolved to the wrong directory, and the shape is the same every time: success reported, nothing measured. When a signal is cheap and reassuring, ask what it would look like if the thing it measures had not run at all, and check that instead.
+
 ## Entry schema
 
 ```json
