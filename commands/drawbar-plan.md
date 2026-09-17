@@ -208,6 +208,19 @@ is reviewed again.
 You may rebut a finding once, in writing, in the story itself. The rebuttal stays there. Then the
 operator decides. Do not re-review the same text after a rebuttal.
 
+Record what each reviewer found and what happened to it, the same discipline `/drawbar-work` §3.5
+applies to its own Ready-bar run. This is the first time these two reviewers see the story, so this
+is where their findings belong — `/drawbar-work` §3.5 skips its own review, and its own recording,
+whenever the story text is unchanged since it passed here, so the same finding is never counted
+under both rules:
+
+```bash
+command -v tq-ledger >/dev/null 2>&1 && tq-ledger record finding --story <id> --rule TQ<n> --reviewer ticket-simulator --outcome accepted
+```
+
+If `tq-ledger` is not installed, skip it — never fail or delay the plan for a missing ledger.
+`--outcome` is `accepted`, `rebutted`, or `waived`, same as `/drawbar-work` §3.5.
+
 Also verify, and report as warnings rather than as gates: every recalled `MUST-CHECK:` entry is
 covered by a Locked decision, the dependency order holds, there is no code reference anchored to a line
 number, and each description passes a read-aloud test — plain words, nothing restated, nothing padded.
