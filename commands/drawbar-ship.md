@@ -1009,6 +1009,18 @@ for the full reasoning. There is no second, hand-copied bash implementation of a
 > only, so archived knowledge vanishes silently. A stray `archive` moved over a thousand
 > entries out of reach in one command. `add` / `recall` / `reindex` only.
 
+**Also record this story's ticket-quality signal here, at the point of use, not from a retro.**
+This pipeline has no equivalent of `drawbar-work`'s Ready bar or gate-escapes step, so this is the
+only place any of it gets recorded. A `false_claims` entry is an `escape` — the ticket or brief
+carried it and nothing caught it until delivery. A freshly-filed `out_of_scope` entry (a fresh
+sub-issue above, not a re-found match) is an `escape` too — the ticket's own scope missed it. A
+surviving or closed `findings[]` entry is a `finding`, recorded against whichever reviewer raised it
+and whichever outcome actually happened (`accepted`, `rebutted`, or `waived`). If `tq-ledger` is
+installed, run `tq-ledger record escape --story "$STORY" --rule TQ1 --note "..."` for each of the
+first two, and `tq-ledger record finding --story "$STORY" --rule TQ<n> --reviewer <name> --outcome
+<outcome> --note "..."` for each of the third. If it is not installed, skip all of it — never fail
+or delay the story for a missing ledger.
+
 ## 7. Advance
 
 Append the story to `stories_done`. `in_flight` is **not** cleared here — §5 (post the

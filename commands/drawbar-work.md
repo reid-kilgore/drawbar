@@ -243,6 +243,20 @@ echo '{"key":"<kebab-key>","type":"<learned|decision|pattern|fact|investigation|
 
 For a mistake to guard against in future, use type `learned` with content beginning `MUST-CHECK:`.
 
+**Also record the code/security review's findings here, at the point of use.** §3.5 already records
+what the ticket-quality reviewers found; this is the same counting discipline applied to `code-reviewer`
+and `security-reviewer`, whose findings are never recorded anywhere else:
+
+```bash
+command -v tq-ledger >/dev/null 2>&1 && tq-ledger record finding --story <id> --rule TQ<n> --reviewer code-reviewer --outcome accepted --note "<one line>"
+```
+
+Use the reviewer that actually raised it, and the outcome that actually happened — `accepted`,
+`rebutted`, or `waived`, same as §3.5. Ticket-shaped escapes (a Locked claim that was never true, an
+unnamed surface, a false premise in the brief) are step 8.5's job, not this one — do not record the
+same defect twice under two names. If `tq-ledger` is not installed, skip this — never fail or delay
+the story for a missing ledger.
+
 ## 8. Close out — PR, leave In Progress
 
 1. Commit referencing the story id (e.g. `feat: … (ABC-123)`), on a feature branch whose name includes the id so Linear auto-links the PR.
