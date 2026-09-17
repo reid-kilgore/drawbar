@@ -73,8 +73,10 @@ review costs an implementation, a review, a fix pass, and a second review.
 Record what each reviewer found and what happened to it. A rule can only be judged by counting:
 
 ```bash
-tq-ledger record finding --story <id> --rule TQ4 --reviewer ticket-simulator --outcome accepted
+command -v tq-ledger >/dev/null 2>&1 && tq-ledger record finding --story <id> --rule TQ4 --reviewer ticket-simulator --outcome accepted
 ```
+
+If `tq-ledger` is not installed, skip it — never fail or delay the story for a missing ledger.
 
 `--outcome` is `accepted`, `rebutted`, or `waived`. Record a rebuttal as readily as an acceptance — a rule
 whose findings are usually rebutted is a bad rule, and that only becomes visible if the rebuttals are
@@ -263,8 +265,10 @@ caught is the gate working. Everything the story already carried is the story wo
 both is the finding.
 
 ```bash
-tq-ledger record escape --story <id> --rule TQ6 --note "one sentence, plain English"
+command -v tq-ledger >/dev/null 2>&1 && tq-ledger record escape --story <id> --rule TQ6 --note "one sentence, plain English"
 ```
+
+If `tq-ledger` is not installed, skip it — never fail or delay the story for a missing ledger.
 
 Use the rule that should have caught it. When no rule covers it, that is the more interesting result: record
 it against `TQ0` and say in the note what rule would have. A rule that does not exist yet is invisible
