@@ -56,6 +56,10 @@ there is no branch for the next story to base on, so the chain has no anchor and
 **parks and halts** (§4, Outcome A). Never collapse the two: `flagged` continues stacking, a
 missing PR stops the night.
 
+**CI runs on the top of the stack only.** A stacked PR's CI workflows skip because its base is not the
+trunk, so a green unlabelled member means skipped, not passed. Exactly one member, the top, carries the
+`run-ci` label, and only until its run is green; see §4's `run-ci` rule for when to add and remove it.
+
 **The operator's contract in the morning: review bottom-up and merge bottom-up, in order.** The
 stack was built bottom-up, so only the bottom PR's diff is meaningful against the configured
 base; every PR above it is meaningful only once the one below has landed. Reviewing or merging
@@ -529,6 +533,22 @@ Shipping a dependent-PR wave through Graphite is the default everywhere in this 
 this run's own stack is exactly that wave. Both paths still read the PR title and body only
 through the tool that consumes them at runtime, and both still go through the same PR-number
 read-back and stack-entry gates below.
+
+**The `run-ci` label lives on the top of the stack only (Reid, 2026-09-17).** A stacked PR's CI
+workflows filter on the base branch, so every member above the first skips its suites and still
+shows green; the label makes the full suite run. The top's tree contains every member below it, so
+one labelled run covers the whole stack, and labelling every member multiplies CI minutes for no
+extra evidence, worst of all when a change ripples up the stack.
+
+- **Add** `run-ci` to the PR this step opens, once it is open (`gh pr edit <n> --add-label run-ci`).
+  Add it again when a change is pushed to the current top and needs verifying.
+- **Remove** it when that labelled run is green, or just before the next story's PR is submitted on
+  top, whichever comes first (`gh pr edit <n> --remove-label run-ci`). The new top gets it.
+- **At most one member carries it at a time, and none once the top's run is green.**
+- **Ripple a change up the stack unlabelled.** Push every member without the label and label only
+  the top once the ripple reaches it; its run covers every member below.
+- **Evidence for any member is the top's labelled green run on a head that contains it.** A green
+  unlabelled stacked member means its suites skipped, not that they passed.
 
 `FLAGGED` comes from the story-lead's §7 report `status` field, on the `ok | flagged`
 contract: `flagged` becomes the JSON boolean `true`, `ok` becomes `false` — a `parked` story

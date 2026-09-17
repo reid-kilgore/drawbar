@@ -247,6 +247,7 @@ For a mistake to guard against in future, use type `learned` with content beginn
 
 1. Commit referencing the story id (e.g. `feat: … (ABC-123)`), on a feature branch whose name includes the id so Linear auto-links the PR.
 2. Push the branch and **open a PR** (`gh pr create`) — title/body referencing the issue id. **Do NOT merge it.** You are handing off for review.
+   If this PR is stacked on another PR's branch, apply the `run-ci` label rule in `commands/drawbar-ship.md` §4: label the new top, and remove the label once its run is green or a PR stacks on top.
 3. **Leave the story `In Progress`.** An attached PR is the signal that it's in review — do not advance the status. **Never** set `Done`, `Ready for QA`, `Ready for Rollout`, `Rolled Out`, or any QA/rollout/completion status; those are owned by humans and QA downstream.
 4. Post a short summary comment on the story (`save_comment`) with what shipped and the PR link.
 
