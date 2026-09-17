@@ -168,7 +168,7 @@ environment, stop that story. Do not build it faithfully, and do not quietly bui
 Raise the unlock request where the decision lives, not in a report:
 
 1. `save_comment` on the **parent** issue, prefixed `UNLOCK-REQUEST:`, naming the decision, the evidence
-   with `file:line` or command output, and the consequence you expect if it is built as written.
+   (the file and the symbol in it, or command output), and the consequence you expect if it is built as written.
 2. Move the story out of `In Progress` and say why in the story.
 3. Stop and tell the operator. Only the authority that locked it can unlock it — a design-review outcome
    goes back to a design review, an operator decision goes back to the operator.

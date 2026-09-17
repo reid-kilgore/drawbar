@@ -209,7 +209,7 @@ You may rebut a finding once, in writing, in the story itself. The rebuttal stay
 operator decides. Do not re-review the same text after a rebuttal.
 
 Also verify, and report as warnings rather than as gates: every recalled `MUST-CHECK:` entry is
-covered by a Locked decision, the dependency order holds, no code reference is anchored to a line
+covered by a Locked decision, the dependency order holds, there is no code reference anchored to a line
 number, and each description passes a read-aloud test — plain words, nothing restated, nothing padded.
 
 The full standard is the `ticket-quality` skill; the review doctrine is `adversarial-review`.
