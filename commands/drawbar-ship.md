@@ -352,17 +352,82 @@ genuinely outside the snapshot can only ever reach this halt.
 **Before dispatching, `in_flight` is the authoritative duplicate-dispatch guard (Locked
 13).** Check the state file: a non-null `in_flight` means a dispatch may already be running.
 
-- If `now - in_flight.agent_dispatched_at` is **within** 2x the heartbeat (see below), this
+- **First, run the liveness test below.** A lead the test finds **dead** goes straight to
+  *Crash recovery*, whatever `agent_dispatched_at` reads — a nudge does not revive a dead
+  lead, so do not send one first, and do not wait out the rest of the heartbeat window on a
+  lead that has already stopped existing. Age alone cannot tell a dead lead from one quietly
+  working; that is the gap this test closes.
+- If the lead is **alive**, or liveness **cannot be established** (see below), fall back to
+  age: if `now - in_flight.agent_dispatched_at` is **within** 2x the heartbeat (see below), this
   is a fresh, live dispatch — **no-op, do not dispatch a second agent at all, for ANY story,
   while `in_flight` is non-null.** The guard is per-run, not per-story: `in_flight` names one
   story-lead dispatch at a time regardless of which story it names, so a different story
-  never justifies a second dispatch either.
+  never justifies a second dispatch either. A confirmed-**alive**-but-quiet lead is the one
+  case that does not simply wait out the heartbeat: schedule the next check early — see "Early
+  re-check" below — instead of sleeping the full window.
 - If it **exceeds** 2x the heartbeat (strict `>` — exactly 2x is still fresh, a deliberate
   boundary choice), the prior dispatch is presumed crashed — go to *Crash recovery* instead
   of no-op'ing forever. (The repo probe used there is a crash-recovery tool only, with a
   blind window between dispatch and first commit — it read "indistinguishable from never
   started" one minute after a live dispatch, so it must never gate a fresh in-window check.)
 - If `in_flight` is `null`, proceed to dispatch below.
+
+**Liveness test.** Run this whenever `in_flight` is non-null, before consulting its age. A
+process check is deliberately not part of this test: `lsof +D "$PROJECT_DIR"` also lists the
+ship session's own Claude process, its shell, and `lsof` itself, all of which have that
+directory as an ancestor of their cwd — so a process-based check reads "alive" unconditionally
+and never detects a dead lead. A lead is **dead** when the newest activity in its own subagents
+directory is 20 or more minutes old, where "its own subagents directory" is not just the lead's
+own transcript file: after Fix 1, the lead spends most of a story blocked in the foreground on
+whichever sub-agent it dispatched (the implementer, a reviewer), writing nothing to its own
+transcript for 30 minutes or more while that child runs, and that child's transcript lands in
+the *same* subagents directory the lead's does. Liveness is therefore the newest `.jsonl` mtime
+across that whole directory, not the lead's file in isolation.
+
+```bash
+# Locate the lead's transcript by the deterministic name it was dispatched under, scoped to
+# THIS project's own encoded-cwd directory — never a scan across every project's transcripts.
+STORY="${IN_FLIGHT_STORY}"   # in_flight.story, read from the state file
+ENCODED_CWD=$(printf '%s' "$PROJECT_DIR" | sed 's/[\/.]/-/g')
+TRANSCRIPT=$(ls -t ~/.claude/projects/"$ENCODED_CWD"/*/subagents/agent-adrawbar-story-lead-"$STORY"-*.jsonl 2>/dev/null | head -1)
+
+if [ -z "$TRANSCRIPT" ]; then
+  echo "LIVENESS: transcript for drawbar-story-lead-$STORY not found under $ENCODED_CWD — cannot establish liveness, falling back to heartbeat age."
+else
+  # The directory the lead's own transcript lives in also holds every child it dispatched
+  # (implementer, reviewers) in this story — the newest file there, not the lead's file alone,
+  # is the activity signal.
+  SUBAGENTS_DIR=$(dirname "$TRANSCRIPT")
+  NEWEST=$(ls -t "$SUBAGENTS_DIR"/*.jsonl 2>/dev/null | head -1)
+  MTIME=$(stat -f %m "$NEWEST" 2>/dev/null || stat -c %Y "$NEWEST" 2>/dev/null)
+  MTIME_AGE_S=$(( $(date +%s) - MTIME ))
+
+  # 20 minutes, not 10: a synchronous Bash call inside the lead or a child cannot run past the
+  # harness's own ~10-minute tool timeout, so 20 minutes leaves a full timeout's margin for a
+  # long foreground command before treating silence as death. An unrelated agent writing into
+  # this same directory can only ever push this test toward "alive" — never toward "dead" — so
+  # the failure mode of sharing the directory is one extra heartbeat wait, not a missed crash.
+  if [ "$MTIME_AGE_S" -ge 1200 ]; then
+    echo "LIVENESS: dead — newest activity in $SUBAGENTS_DIR is ${MTIME_AGE_S}s stale."
+  else
+    echo "LIVENESS: alive — newest activity in $SUBAGENTS_DIR is ${MTIME_AGE_S}s old."
+  fi
+fi
+```
+
+**If the transcript cannot be located** — the deterministic name was never recorded (an older
+run, or a dispatch made before this rule existed), or nothing on disk matches it — liveness
+**cannot be established**. Do not guess dead: log the line above and fall back to today's
+2x-heartbeat behavior for this check.
+
+**Early re-check.** A lead confirmed alive but quiet does not need the full 45-60 minute
+heartbeat before the next look — schedule the next check in about 10 minutes instead. Where
+this run is driven by `/loop`, that is a `ScheduleWakeup` call with `delaySeconds` around 600
+in place of the loop's normal fallback interval; the state file's own heartbeat value is
+untouched; only the timing of the *next check* moves in. If the invocation has no such
+scheduling available — a bare, non-looped run of this command — there is no mechanism here to
+act on early, so keep only the detection: log that the lead is alive-but-quiet and let the
+run's normal cadence decide when it is checked again.
 
 `scripts/lib/run-state.ts` (`dispatchVerdict` / `maybeDispatch`) implements this verdict as a
 pure function with an injected clock — follow the same boundary and ordering as
@@ -438,7 +503,14 @@ The heartbeat is **2700-3600 seconds** (45-60 minutes) and is **re-armed at ever
 this dispatch's `agent_dispatched_at` is what the 2x-heartbeat staleness check above measures
 from, which is exactly what makes that threshold well-defined rather than a moving target.
 
-Then dispatch **one** `drawbar-story-lead` agent (Opus). The brief must carry:
+**Name the dispatch deterministically: `drawbar-story-lead-<STORY>`.** This is not a schema
+change — `in_flight` already names the story, and a name derived from it needs no new field
+and nothing new to keep in sync. It is what lets the liveness test below find the lead's own
+transcript later, from `in_flight.story` alone, without trusting anything the lead itself
+could have written.
+
+Then dispatch **one** `drawbar-story-lead` agent (Opus), named `drawbar-story-lead-<STORY>`
+as above. The brief must carry:
 
 - the story id, full description, and acceptance criteria
 - every `Locked` decision and `MUST-CHECK:` verbatim
@@ -1034,7 +1106,10 @@ file present, a dirty tree, a branch mid-story, no PR, and no Linear comment. Pr
 must route here rather than dying. **A stale `in_flight`** (step 2's duplicate-dispatch
 guard: `now - in_flight.agent_dispatched_at` exceeding 2x the heartbeat) **routes here too**
 — that is Locked 13's whole point: a crashed run must not deadlock every later invocation by
-leaving `in_flight` permanently "fresh" from a no-op's point of view.
+leaving `in_flight` permanently "fresh" from a no-op's point of view. **A lead the step 2
+liveness test finds dead routes here immediately, on the same terms** — its `in_flight` may
+still read well within the heartbeat window; a dead lead does not wait to become stale by age
+before recovery starts.
 
 **Recovery re-establishes the stack base, not merely the in-flight story.** That is the
 responsibility this section gained with the stack: a resumed run that resolves the wrong base
