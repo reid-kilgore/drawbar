@@ -180,7 +180,14 @@ Before review, prove the tests bite:
 - **Per injected seam:** enumerate every closure, repository, and dependency injected into
   any function under test, and mutate **each independently**. Each must produce a failure.
   A seam no test exercises is a hole regardless of how many tests pass.
-- Restore each mutation before the next (the tree is committed, so `git checkout --` is safe).
+- Restore each mutation from a saved copy, never from git. Before mutating a file, copy it to a
+  scratch path you name in full; after the run, copy it back and confirm with `cmp` that it matches.
+  Record `git status --porcelain` and `git diff | shasum` before the pass, and check that both are
+  unchanged after each restore; if either moved, stop and report. Never run `git checkout --`,
+  `git restore` or `git stash` here. The tree is not committed when this gate re-runs on the fix pass
+  (see "Review, and exactly one fix pass"), and "commit each verified increment" has failed to
+  prevent this twice: a lead that restored with `git checkout --` erased four uncommitted source files it had
+  never mutated, then had to rebuild them from the implementer's transcript.
 
 **Never mutate against a lead observation.** Entries in the brief's `## Read set` are evidence,
 not decisions, and a mutation pass that pins one with a test makes a guess permanent — the

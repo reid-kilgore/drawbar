@@ -995,7 +995,7 @@ describe("Locked 23 — preserved verbatim (grep-assertable, or hash-pinned for 
     expect(
       hash,
       "§4 body hash changed — if this is an intentional edit, regenerate with the one-liner in the comment above; if not, something silently altered §4."
-    ).toBe("85c257210a86333ad896ee843148d0cafeecde489f27bdb5e5363277d062ff22");
+    ).toBe("44585f4c61a3335665a88874a054bbfbca708e8cc90ce731adb1b1130a99af76");
   });
 });
 
