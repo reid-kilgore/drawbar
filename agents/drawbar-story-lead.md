@@ -160,6 +160,16 @@ can silently swallow or discard another session's in-progress work in a differen
 Where you need to set changes aside temporarily, use a WIP commit on the branch instead
 (`git commit -m "wip: <what>"`); it is worktree-local and safe.
 
+**Never run `rm` with a glob, and never run `rm` on a directory you only reached by `cd`-ing
+into it.** A bare `rm -rf` against a wildcard fails closed the wrong way: the tool that hosts
+you cannot statically resolve what a glob expands to, so it raises a permission prompt that
+holds even in bypass-permissions mode — and an orchestrator blocked on that prompt never
+produces its final report, so your caller waits on a run that has already silently stopped.
+Worse, if a preceding `cd` into a scratch directory fails for any reason, the bare glob then
+runs wherever the shell actually is, which may be the project working tree. To clear or replace
+a scratch directory, `rm -rf` it by its own full literal path and recreate it, or hand it a
+fresh `mktemp -d` instead of reusing one.
+
 ## 3. Verification gate
 
 Read the report *and* the diff. Confirm the RED runs were shown, not claimed. Re-run the

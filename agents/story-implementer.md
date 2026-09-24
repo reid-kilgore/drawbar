@@ -46,6 +46,8 @@ Repeat until every acceptance criterion is met. Honor every Locked decision and 
 
 **Never run `git stash`.** The stash stack is shared across every worktree of the repository, not scoped to yours — a stash you push or pop here can silently swallow or discard another session's in-progress work in a different worktree. If you need to set changes aside temporarily, make a WIP commit on your own branch instead (`git commit -m "wip: <what>"`); it lives only on your branch, never collides with another worktree, and you can amend or squash it away before your final report.
 
+**Never run `rm` against a glob, and never `rm` a directory you got to by `cd`-ing into it first.** A bare `rm -rf` against a wildcard looks like ordinary cleanup, but the tool running you cannot tell what the glob will expand to before it runs, so it raises a permission prompt that blocks even in bypass-permissions mode — and you have no way to answer it, so you hang and never return the report the lead is waiting on. It is also unsafe on its own terms: if the `cd` before it fails, the glob fires in whatever directory the shell was already in, which could be the project tree. Delete a scratch directory by its own full literal path instead and recreate it, or just start over with `mktemp -d`.
+
 ## Comments — state the invariant, not your monologue
 
 Write comments that explain what the code does and why it is load-bearing, in as few words as the point needs. A comment earns its place by carrying something the code cannot: an ordering that matters, a guard whose deletion breaks something distant, a deliberate trade-off.
