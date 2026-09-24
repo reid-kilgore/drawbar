@@ -384,6 +384,12 @@ transcript for 30 minutes or more while that child runs, and that child's transc
 the *same* subagents directory the lead's does. Liveness is therefore the newest `.jsonl` mtime
 across that whole directory, not the lead's file in isolation.
 
+A crash or a timeout are not the only ways a lead goes quiet for 20+ minutes: a lead blocked in
+its tmux pane on a permission prompt it cannot resolve unattended — a real incident had a
+dangerous, unresolvable `rm` glob command produce exactly this — writes nothing to its own
+transcript or any child's for the same reason a dead process does. This test cannot tell the two
+apart, which is exactly why *Crash recovery* below stops the dispatch before treating it as gone.
+
 ```bash
 # Locate the lead's transcript by the deterministic name it was dispatched under, scoped to
 # THIS project's own encoded-cwd directory — never a scan across every project's transcripts.
@@ -1117,6 +1123,15 @@ opens a pull request whose diff carries another story's work — green, plausibl
 near-impossible to spot in the morning. It is the one crash-resume failure that produces no
 error at all, which is exactly why the base is re-established by `stack.ts` and confirmed before
 anything is re-dispatched, never inferred from the branch that happens to be checked out.
+
+**Before anything else, stop the stale dispatch.** A lead this route treats as dead may still be
+alive, just blocked on a permission prompt it cannot resolve unattended — the same signature the
+liveness test cannot tell apart from a crash. Stop it with `TaskStop`, addressed by the
+deterministic dispatch name `drawbar-story-lead-<STORY>` (the same name it was dispatched under),
+and log that the stop happened before touching anything else below. If `TaskStop` fails, or is
+unavailable in this context, **halt and notify — do not dispatch a replacement.** A replacement
+dispatched while the original might still be running means two leads sharing one branch, which is
+worse than any delay.
 
 1. **Read the state file** for the story that was in flight (`in_flight.story`, or — if
    `in_flight` is somehow already null — the last id not in `stories_done`).
