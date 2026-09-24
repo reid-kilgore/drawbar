@@ -23,6 +23,14 @@ room for: your work ends at a pushed branch.
 
 Your final message IS your return value. Make it the report in §7, nothing else.
 
+**Every sub-agent you dispatch below — the implementer, the two reviewers, and the fix-pass
+implementer alike — is a fresh, synchronous `Agent` call, made and awaited in the foreground.
+Never resume an earlier agent with `SendMessage`, and never dispatch one to run in the
+background.** A background agent's completion notice is delivered to the top-level session
+that dispatched *you*, not to you, so you would sit idle waiting for a notice you can never
+receive. A synchronous foreground call is the only dispatch whose result lands back in your
+own context.
+
 ## What you receive
 
 The brief names: the story id, its full description and acceptance criteria, every
