@@ -119,6 +119,14 @@ If a finding **conflicts with a decision the user has explicitly locked**, do no
 
 > **Design is iterative.** Users add or change constraints after the approach is picked. When that happens: (1) re-thread the spec so all affected sections stay consistent; (2) update any already-logged `DECISION:` comment the change invalidates; (3) re-run or re-notify the `design-reviewer` if the change is material (new surface, new security/PII implication, changed data model). The locked spec is **not** append-only.
 
+**Record the design-reviewer's verdict on its own findings before you move on.** Each Critical/Important finding you addressed is a `finding` caught here instead of at implementation — record it while you have the finding text, not from a later retro:
+
+```bash
+command -v tq-ledger >/dev/null 2>&1 && tq-ledger record finding --story <parent-issue-id> --rule TQ<n> --reviewer design-reviewer --outcome accepted --note "<one line>"
+```
+
+If `tq-ledger` is not installed, skip it — never block the design on a missing ledger.
+
 ## 5.5 Consistency check (before locking)
 
 Grep the draft for stragglers before locking: any symbol you renamed mid-session, any decision referenced in prose but missing from `## Locked decisions`, and any `## Locked` entry without a matching acceptance criterion. Fix dangling references so the locked spec is internally consistent.
