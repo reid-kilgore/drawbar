@@ -91,6 +91,13 @@ function makeGitSpy(overrides: {
   checkAttr?: GitResp | ((argv: string[]) => GitResp);
   checkIgnore?: GitResp | ((argv: string[]) => GitResp);
   lsFiles?: GitResp;
+  // This story: `checkProjectStore` calls `resolveContext`, which calls `resolveRoot`, which
+  // makes ONE OR TWO `rev-parse` calls against the PROJECT directory (not envDir) before falling
+  // back to treating it as `cwd`. The default fixtures drive `checkProjectStore` entirely through
+  // `DRAWBAR_MEMORY_DIR` (an absolute value), so root never affects the resolved store — this
+  // default (git failure -> root falls back to cwd) is never load-bearing for those tests, only
+  // present so the call is answered rather than hitting the "unexpected call" branch below.
+  revParse?: GitResp | ((argv: string[]) => GitResp);
 } = {}): { git: Runner; calls: string[][] } {
   const calls: string[][] = [];
   let pushIdx = 0;
@@ -99,6 +106,10 @@ function makeGitSpy(overrides: {
     calls.push(argv);
     const sub = argv[2];
     if (sub === "ls-files") return toRunnerResp(overrides.lsFiles ?? NOT_TRACKED);
+    if (sub === "rev-parse") {
+      if (typeof overrides.revParse === "function") return toRunnerResp(overrides.revParse(argv));
+      return toRunnerResp(overrides.revParse ?? { code: 1, stdout: "", stderr: "not a git repository (fixture)" });
+    }
     if (sub === "check-ignore") {
       if (typeof overrides.checkIgnore === "function") return toRunnerResp(overrides.checkIgnore(argv));
       return toRunnerResp(overrides.checkIgnore ?? NOT_IGNORED);
@@ -171,6 +182,8 @@ function trustDeps(
     expectedConfigPath?: string;
     readConfig?: (p: string) => string;
     realpath?: (p: string) => string;
+    env?: Record<string, string | undefined>;
+    readFileSync?: (p: string) => string;
   } = {},
 ) {
   return {
@@ -178,15 +191,28 @@ function trustDeps(
     expectedConfigPath: over.expectedConfigPath ?? CONFIG_PATH,
     readConfig: over.readConfig ?? (() => shipConfigText()),
     realpath: over.realpath ?? ((p: string) => p),
+    // This story's checkProjectStore gate: by default `drawbar-kb path` from the project
+    // directory agrees with `kbDir` via `DRAWBAR_MEMORY_DIR` (an absolute value, so root/config
+    // resolution never has to run for real) — every pre-existing fixture keeps passing the new
+    // gate without wiring a project-side git/config layout. Tests for the mismatch/unresolvable
+    // cases override `env`; the module-scope `kbDir` is read at CALL time, after `beforeEach`.
+    env: over.env ?? { DRAWBAR_MEMORY_DIR: kbDir },
+    readFileSync: over.readFileSync ?? (() => { throw new Error("ENOENT: no such file (fixture default)"); }),
   };
 }
 
 // The main()-level equivalent: the anchor arrives through `env`, so main()'s own call to
 // ship-config.ts's `resolveConfigPath` is what is under test, not a hand-passed value.
-function mainTrustDeps(over: { readConfig?: (p: string) => string } = {}): Partial<MainDeps> {
+function mainTrustDeps(
+  over: { readConfig?: (p: string) => string; env?: Record<string, string | undefined> } = {},
+): Partial<MainDeps> {
   return {
     readConfig: over.readConfig ?? (() => shipConfigText()),
-    env: { DRAWBAR_SHIP_CONFIG: CONFIG_PATH },
+    // DRAWBAR_MEMORY_DIR alongside DRAWBAR_SHIP_CONFIG: same reasoning as `trustDeps` above —
+    // by default `drawbar-kb path` from the project directory agrees with `kbDir`, so this
+    // story's new checkProjectStore gate stays out of the way of every pre-existing main()-level
+    // test. Tests that exercise checkProjectStore directly pass their own `env`.
+    env: over.env ?? { DRAWBAR_SHIP_CONFIG: CONFIG_PATH, DRAWBAR_MEMORY_DIR: kbDir },
     realpath: (p: string) => p,
   };
 }
@@ -1065,6 +1091,43 @@ describe("knowledgePreflight", () => {
     expect(result).toMatchObject({ ok: false, reason: "knowledge_repo_dirty" });
   });
 
+  // --- this story (REDD, first-hand): dirt CONFINED to the two KB files is expected, not a
+  // precondition failure. Locked 15's own header says inline `drawbar-kb add` calls make
+  // knowledge.jsonl/knowledge.archive.jsonl dirty at unpredictable times BY DESIGN, and
+  // syncKnowledge stages+commits exactly those two paths every attempt regardless. Before this
+  // fix, another session's pending inline writes to those two files alone made preflight refuse
+  // `knowledge_repo_dirty` and block an unrelated session's ship — reproduced on REDD-mason.
+
+  test("dirt confined to EXACTLY the two KB files -> preflight proceeds, not knowledge_repo_dirty", () => {
+    const activeRel = relative(envDir, storePaths(kbDir).active);
+    const archiveRel = relative(envDir, storePaths(kbDir).archive);
+    const { git } = makeGitSpy({
+      status: { code: 0, stdout: ` M ${activeRel}\n M ${archiveRel}\n`, stderr: "" },
+    });
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({ envDir, kbDir, git, ...fs, ...trustDeps() });
+    expect(result).toEqual({ ok: true, gitignoreCreated: false });
+  });
+
+  test("a KB file plus one unrelated tracked file dirty -> still knowledge_repo_dirty", () => {
+    const activeRel = relative(envDir, storePaths(kbDir).active);
+    const { git } = makeGitSpy({
+      status: { code: 0, stdout: ` M ${activeRel}\n M some-other-tracked-file.txt\n`, stderr: "" },
+    });
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({ envDir, kbDir, git, ...fs, ...trustDeps() });
+    expect(result).toMatchObject({ ok: false, reason: "knowledge_repo_dirty" });
+  });
+
+  test("only an unrelated tracked file dirty (no KB path involved) -> knowledge_repo_dirty", () => {
+    const { git } = makeGitSpy({
+      status: { code: 0, stdout: " M some-other-tracked-file.txt\n", stderr: "" },
+    });
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({ envDir, kbDir, git, ...fs, ...trustDeps() });
+    expect(result).toMatchObject({ ok: false, reason: "knowledge_repo_dirty" });
+  });
+
   // Symmetrical with syncKnowledge's own "untracked files never read as dirty" test — Locked
   // 16's preflight dirty check must use the SAME untracked-tolerant rule syncKnowledge's own
   // precondition uses, not merely happen to behave the same way today.
@@ -1183,6 +1246,122 @@ describe("knowledgePreflight", () => {
     const written = fs.written[join(envDir, ".drawbar", "runs", ".gitignore")]!;
     expect(written).toBe("# /drawbar-ship run state (T0 story snapshots). Local scratch — never committed.\n*\n!.gitignore\n");
     expect(Buffer.byteLength(written, "utf8")).toBe(97);
+  });
+
+  // --- this story: stray-store detection ------------------------------------------------------
+  //
+  // Two reproduced failures — `drawbar-kb path` (run from the PROJECT directory) resolving to a
+  // store other than `kbDir`, and a stray `knowledge.jsonl` sitting in envDir's own root instead
+  // of `.drawbar/memory` — both silent until now ("a wrong store answers with less; it does not
+  // fail"). Every OTHER test in this describe block passes the new gates vacuously (default
+  // `trustDeps()`/`fakeFs()` agree by construction); these tests exercise the gates themselves.
+
+  test("project store agrees with kbDir by default -> the new gate does not interfere with an otherwise-clean preflight", () => {
+    const { git } = makeGitSpy();
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({ envDir, kbDir, git, ...fs, ...trustDeps() });
+    expect(result).toEqual({ ok: true, gitignoreCreated: false });
+  });
+
+  test("project store mismatch: drawbar-kb path from the project directory resolves elsewhere -> refuse, naming both paths", () => {
+    const { git } = makeGitSpy();
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const wrongDir = join(dirname(envDir), "not-the-real-store", ".drawbar", "memory");
+    const result = knowledgePreflight({
+      envDir, kbDir, git, ...fs,
+      ...trustDeps({ env: { DRAWBAR_MEMORY_DIR: wrongDir } }),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("project_store_mismatch");
+      expect(result.detail).toContain(wrongDir);
+      expect(result.detail).toContain(kbDir);
+      expect(result.detail).toContain("memoryDir");
+    }
+  });
+
+  test("project store unresolvable: drawbar-kb path resolution itself fails -> a distinct reason, not a crash", () => {
+    const { git } = makeGitSpy();
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({
+      envDir, kbDir, git, ...fs,
+      // A BEL control character fails `resolveContext`'s own `checkEnvValue` guard on
+      // DRAWBAR_MEMORY_DIR before it ever becomes a path.
+      ...trustDeps({ env: { DRAWBAR_MEMORY_DIR: "bad\u0007value" } }),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("project_store_unresolvable");
+      expect(result.detail).toContain("/abs/project"); // the projectDir named in the config fixture
+    }
+  });
+
+  test("a trailing slash on the resolved store path is not read as a mismatch", () => {
+    const { git } = makeGitSpy();
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({
+      envDir, kbDir, git, ...fs,
+      ...trustDeps({ env: { DRAWBAR_MEMORY_DIR: kbDir + "/" } }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  test("a symlink alias of kbDir is NOT read as equal — same no-realpath discipline assertEnvDirTrusted's envDir check uses", () => {
+    // Deliberately literal, not realpath-resolved: two DIFFERENT paths that happen to point at
+    // the same directory must still refuse, exactly as `assertEnvDirTrusted`'s own comment
+    // argues (realpath would only ever make either equality check LOOSER, admitting a value
+    // whose literal never matches).
+    ensureDir(kbDir);
+    const alias = join(envDir, ".drawbar", "memory-alias");
+    symlinkSync(kbDir, alias);
+    const { git } = makeGitSpy();
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    const result = knowledgePreflight({
+      envDir, kbDir, git, ...fs,
+      ...trustDeps({ env: { DRAWBAR_MEMORY_DIR: alias } }),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("project_store_mismatch");
+  });
+
+  test("a non-empty knowledge.jsonl in envDir's ROOT (not .drawbar/memory) -> refuse, naming the stray file and the fix", () => {
+    const { git } = makeGitSpy();
+    const strayPath = join(envDir, "knowledge.jsonl");
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore"), strayPath]));
+    const result = knowledgePreflight({
+      envDir, kbDir, git, ...fs,
+      ...trustDeps({
+        readFileSync: (p) => (p === strayPath ? '{"key":"a","type":"fact"}\n' : (() => { throw new Error("ENOENT"); })()),
+      }),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("stray_knowledge_at_env_root");
+      expect(result.detail).toContain(strayPath);
+      expect(result.detail).toContain(kbDir);
+      expect(result.detail).toContain("drawbar-kb add");
+    }
+  });
+
+  test("an EMPTY knowledge.jsonl in envDir's root is NOT refused — absence of content is not evidence of the failure", () => {
+    const { git } = makeGitSpy();
+    const strayPath = join(envDir, "knowledge.jsonl");
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore"), strayPath]));
+    const result = knowledgePreflight({
+      envDir, kbDir, git, ...fs,
+      ...trustDeps({ readFileSync: (p) => (p === strayPath ? "   \n" : (() => { throw new Error("ENOENT"); })()) }),
+    });
+    expect(result).toEqual({ ok: true, gitignoreCreated: false });
+  });
+
+  test("an absent knowledge.jsonl at envDir's root is not refused (the ordinary, correctly-laid-out case)", () => {
+    // Every other test in this file already proves this implicitly (none of them seed a stray
+    // file and all pass); this test names the property directly rather than leaving it inferred.
+    const { git } = makeGitSpy();
+    const fs = fakeFs(new Set([join(envDir, ".drawbar", "runs", ".gitignore")]));
+    expect(fs.existsSync(join(envDir, "knowledge.jsonl"))).toBe(false); // non-vacuous precondition
+    const result = knowledgePreflight({ envDir, kbDir, git, ...fs, ...trustDeps() });
+    expect(result).toEqual({ ok: true, gitignoreCreated: false });
   });
 });
 
@@ -1330,9 +1509,16 @@ describe("real runner: a missing git binary fails closed, not an uncaught throw"
 
   test("preflight against a real subprocess with PATH holding only bun's own directory", async () => {
     const configPath = writeRealConfig();
-    const { code, out } = await runScrubbed([
-      "preflight", "--env-dir", envDir, "--dir", kbDir, "--config-path", configPath,
-    ]);
+    // This story: `projectDir` here (`<envDir>/project-elsewhere`) is a fixture path that does
+    // not really exist, so `drawbar-kb path` resolved from it for real would legitimately land
+    // somewhere other than `kbDir` — a true positive for the new checkProjectStore gate, but not
+    // what THIS test is proving (real-config-file trust-root wiring, reaching `status_failed`).
+    // DRAWBAR_MEMORY_DIR makes the new gate agree, the same way `mainTrustDeps` does in-process.
+    const { code, out } = await runScrubbed(
+      ["preflight", "--env-dir", envDir, "--dir", kbDir, "--config-path", configPath],
+      undefined,
+      { DRAWBAR_MEMORY_DIR: kbDir },
+    );
     expect(code).not.toBe(0);
     const parsed = JSON.parse(out); // throws if the CLI crashed instead of writing well-formed JSON
     expect(parsed.ok).toBe(false);
@@ -1423,9 +1609,11 @@ describe("real runner: a missing git binary fails closed, not an uncaught throw"
 
   test("a refusal reaches the REAL stderr through main()'s default writeStderr", async () => {
     const configPath = writeRealConfig();
-    const { code, err } = await runScrubbed([
-      "preflight", "--env-dir", envDir, "--dir", kbDir, "--config-path", configPath,
-    ]);
+    const { code, err } = await runScrubbed(
+      ["preflight", "--env-dir", envDir, "--dir", kbDir, "--config-path", configPath],
+      undefined,
+      { DRAWBAR_MEMORY_DIR: kbDir }, // see the earlier test's comment on why this gate needs it
+    );
     expect(code).not.toBe(0);
     expect(err).toContain("refused: status_failed");
   });
@@ -1459,6 +1647,7 @@ describe("R6: main()'s default seams are wired to the real thing (git shim, real
         // injected-runner-no-cwd-silently-inherits-caller-directory means $3 is the subcommand.
         'case "$3" in\n' +
         "  ls-files) exit 1 ;;\n" + // R7 trust root: the config is NOT tracked
+        "  rev-parse) exit 1 ;;\n" + // this story: project store's resolveRoot falls back to cwd
         "  status) exit 0 ;;\n" + // clean tree
         `  check-attr) echo "$6: merge: ${mergeAttr}" ; exit 0 ;;\n` +
         "  check-ignore) exit 1 ;;\n" + // R7: neither knowledge path is gitignored
@@ -1482,6 +1671,11 @@ describe("R6: main()'s default seams are wired to the real thing (git shim, real
       env: {
         PATH: `${shimDir}:${bunDir}`,
         ...(configIdx === -1 ? {} : { DRAWBAR_SHIP_CONFIG: args[configIdx + 1]! }),
+        // This story: these tests' fixture `projectDir` (`<envDir>/project-elsewhere`) does not
+        // really exist, so a real `drawbar-kb path` resolution from it would legitimately not
+        // agree with `kbDir` — a true positive this suite is not exercising here. DRAWBAR_MEMORY_DIR
+        // makes the new checkProjectStore gate agree, same as `mainTrustDeps` does in-process.
+        DRAWBAR_MEMORY_DIR: kbDir,
       },
       stdin: "ignore",
       stdout: "pipe",
@@ -1495,11 +1689,12 @@ describe("R6: main()'s default seams are wired to the real thing (git shim, real
   }
 
   test("preflight succeeds end to end: the default runner spawns `git`, and the default fs seams do the real work", async () => {
+    const projectDir = join(envDir, "project-elsewhere");
     const configPath = join(envDir, "ship.config.json");
     writeFileSync(
       configPath,
       JSON.stringify({
-        envDir, projectDir: join(envDir, "project-elsewhere"), repo: "org/repo",
+        envDir, projectDir, repo: "org/repo",
         team: "PCO", baseBranch: "main", requiredChecks: ["build"],
       }),
     );
@@ -1517,16 +1712,24 @@ describe("R6: main()'s default seams are wired to the real thing (git shim, real
     expect(JSON.parse(out)).toEqual({ ok: true, gitignoreCreated: true });
 
     // The shim really was invoked, with the calls this verb makes. The trust root's `ls-files`
-    // comes FIRST and is anchored at the config's directory; everything after it is `-C <envDir>`.
-    expect(log.length).toBe(6); // ls-files, status, check-attr x2, check-ignore x2
+    // comes FIRST and is anchored at the config's directory; the project store check's two
+    // `rev-parse` calls are anchored at `projectDir` (a DIFFERENT directory, by design — that is
+    // the whole point of cross-checking against the project's own root); everything else is
+    // `-C <envDir>`.
+    expect(log.length).toBe(8); // ls-files, rev-parse x2, status, check-attr x2, check-ignore x2
     expect(log[0]).toBe(`-C ${envDir} ls-files --error-unmatch ${configPath}`);
-    expect(log[1]).toBe(`-C ${envDir} status --porcelain --untracked-files=no`);
-    expect(log[2]).toContain("check-attr merge --");
-    expect(log[2]).toContain("knowledge.jsonl");
-    expect(log[3]).toContain("knowledge.archive.jsonl");
-    expect(log[4]).toContain("check-ignore -q --");
+    expect(log[1]).toBe(`-C ${projectDir} rev-parse --path-format=absolute --git-common-dir`);
+    expect(log[2]).toBe(`-C ${projectDir} rev-parse --show-toplevel`);
+    expect(log[3]).toBe(`-C ${envDir} status --porcelain --untracked-files=no`);
+    expect(log[4]).toContain("check-attr merge --");
+    expect(log[4]).toContain("knowledge.jsonl");
     expect(log[5]).toContain("knowledge.archive.jsonl");
-    for (const line of log) expect(line.startsWith(`-C ${envDir} `)).toBe(true);
+    expect(log[6]).toContain("check-ignore -q --");
+    expect(log[7]).toContain("knowledge.archive.jsonl");
+    for (const line of log) {
+      if (line.startsWith(`-C ${projectDir} `)) continue; // the project-store check's own calls
+      expect(line.startsWith(`-C ${envDir} `)).toBe(true);
+    }
 
     // ...and the DEFAULT mkdirSync/writeFileSync/existsSync seams did the real work on the real
     // filesystem. Wired to each other's parameter, the mkdir writes a file where the runs dir

@@ -136,6 +136,109 @@ import { buildIndex } from "./fts";
 import type { Entry } from "./schema";
 import { isCleanAbsolutePath, isNonEmptyTrimmed, parseShipConfig, resolveConfigPath, sanitizeForOutput } from "./ship-config";
 import type { Runner, ShipConfig } from "./ship-config";
+import { resolveContext } from "./project-config";
+
+// --- stray-store check (this story) -----------------------------------------------------------
+//
+// Two REPRODUCED, first-hand failures, both leaving a knowledge write in a store nothing ever
+// syncs, silently ("a wrong store answers with less; it does not fail" — the drawbar-knowledge
+// skill's own warning):
+//
+//   (1) A project's gitignored `.drawbar/config.json` carried no `memoryDir`. `drawbar-kb path`,
+//       run from the PROJECT directory during an inline mid-run `drawbar-kb add`, therefore fell
+//       back to `project-config.ts`'s default — `<project repo root>/.drawbar/memory` — which is
+//       an ordinary gitignored per-worktree directory in the PRODUCT repo, not the separate,
+//       git-tracked KNOWLEDGE repo `envDir`/`kbDir` name. Every inline write during that run
+//       landed there instead, invisible to every other session, and `kb-sync`'s own sync loop
+//       never looks at it because it only ever touches `kbDir`.
+//   (2) A caller passed `envDir` where `--dir` (`kbDir`) belonged, so `appendEntry` wrote
+//       `knowledge.jsonl` straight into the knowledge repo's ROOT rather than into
+//       `.drawbar/memory`. Not `kbDir`, so nothing downstream (`syncKnowledge`, `recall`) ever
+//       reads it either.
+//
+// Both are checked in `knowledgePreflight`, not `syncKnowledge`: preflight is the ONE place a
+// ship run is guaranteed to visit before any inline write happens, so this is where "wrong
+// store" gets caught before it can happen quietly for an entire run.
+function checkProjectStore(input: {
+  envDir: string;
+  kbDir: string;
+  git: Runner;
+  env: Record<string, string | undefined>;
+  exists: (p: string) => boolean;
+  readFile: (p: string) => string;
+  projectDir: string;
+}): { ok: true } | { ok: false; reason: PreflightReason; detail: string } {
+  const { envDir, kbDir, git, env, exists, readFile, projectDir } = input;
+  // Delegated WHOLE to `project-config.ts`'s `resolveContext` — the exact function
+  // `drawbar-kb path`/`drawbar-kb add` run when invoked from the project directory. This module
+  // must never grow a second, hand-rolled copy of that precedence (flag > env > config > default).
+  const resolved = resolveContext({
+    cwd: projectDir,
+    env,
+    git,
+    fs: { exists, read: readFile },
+  });
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      reason: "project_store_unresolvable",
+      detail: `drawbar-kb path could not be resolved from projectDir ${projectDir}: ${resolved.reason}: ${resolved.detail}`,
+    };
+  }
+  // Compared with `resolve()` on both sides, same discipline `assertEnvDirTrusted`'s envDir
+  // equality uses and for the same reason (an already clean-absolute value, so `resolve` only
+  // collapses a trailing/doubled separator — see that function's own comment on why not
+  // `realpath` here: both sides get the identical transformation, so it could only loosen the
+  // check by admitting a symlink alias, never tighten it).
+  if (resolve(resolved.context.memoryDir) !== resolve(kbDir)) {
+    return {
+      ok: false,
+      reason: "project_store_mismatch",
+      detail:
+        `drawbar-kb path from ${projectDir} resolves to ${resolved.context.memoryDir} ` +
+        `(via ${resolved.context.memoryDirSource}, config ${resolved.context.configPath}), not the store this ` +
+        `sync commits (${kbDir}) — set "memoryDir": ${JSON.stringify(kbDir)} in ` +
+        `${resolved.context.configPath} so an inline \`drawbar-kb add\` during the run lands in the store ` +
+        `this sync actually commits, not a separate, never-synced one`,
+    };
+  }
+  return { ok: true };
+}
+
+// R8: a `knowledge.jsonl` sitting directly in `envDir`'s ROOT — not `.drawbar/memory/knowledge.jsonl`
+// — is exactly reproduced failure (2) above: a caller passed `envDir` where `kbDir` belonged.
+// Checked for EXISTENCE *and* non-emptiness; an absent or empty file here is not evidence of
+// anything (a truly empty file could be a leftover `touch`, and refusing on it would refuse a
+// knowledge repo that has simply never had this problem).
+function checkStrayEnvRootFile(input: {
+  envDir: string;
+  kbDir: string;
+  exists: (p: string) => boolean;
+  readFile: (p: string) => string;
+}): { ok: true } | { ok: false; reason: PreflightReason; detail: string } {
+  const { envDir, kbDir, exists, readFile } = input;
+  const strayPath = join(envDir, "knowledge.jsonl");
+  if (!exists(strayPath)) return { ok: true };
+  let text: string;
+  try {
+    text = readFile(strayPath);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "stray_knowledge_at_env_root",
+      detail: `${strayPath} exists but could not be read: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (text.trim().length === 0) return { ok: true };
+  return {
+    ok: false,
+    reason: "stray_knowledge_at_env_root",
+    detail:
+      `${strayPath} is a non-empty knowledge.jsonl sitting in envDir's root, not the store this sync uses ` +
+      `(${kbDir}) — merge its entries into the real store with \`drawbar-kb add --dir ${kbDir}\` ` +
+      `(one entry at a time, from ${strayPath}), then delete ${strayPath}`,
+  };
+}
 
 // --- the envDir trust root (R5/F2) ------------------------------------------------------------
 //
@@ -694,6 +797,12 @@ export interface PreflightInput {
   existsSync: (p: string) => boolean;
   writeFileSync: (p: string, content: string) => void;
   mkdirSync: (p: string, opts: { recursive: boolean }) => void;
+  // This story: the seams `checkProjectStore` hands to `resolveContext` (env) and both new
+  // checks use for reading a candidate file (readFileSync — a name distinct from `readConfig`
+  // above, because it reads a DIFFERENT file for a DIFFERENT reason: the project's own
+  // `.drawbar/config.json`, or a stray `envDir/knowledge.jsonl`, never the ship config).
+  env: Record<string, string | undefined>;
+  readFileSync: (p: string) => string;
 }
 
 export type PreflightReason =
@@ -703,6 +812,13 @@ export type PreflightReason =
   | EnvDirTrustReason
   // R7: `--dir` must live inside the vouched-for envDir. Same reason name syncKnowledge uses.
   | "kb_dir_not_in_env_dir"
+  // This story: `drawbar-kb path`, resolved from the project directory the trusted ship config
+  // names, must land on this same `kbDir` — see `checkProjectStore` above for the reproduced
+  // failure this closes.
+  | "project_store_unresolvable"
+  | "project_store_mismatch"
+  // This story: a non-empty `knowledge.jsonl` sitting in envDir's ROOT rather than `.drawbar/memory`.
+  | "stray_knowledge_at_env_root"
   | "status_failed"
   | "knowledge_repo_dirty"
   | "check_attr_failed"
@@ -729,6 +845,18 @@ function parseCheckAttrValue(stdout: string): string | null {
   return line.slice(idx + marker.length).trim();
 }
 
+// `git status --porcelain` (short format, no `-z`) prints `XY path` for an ordinary change, or
+// `XY orig -> new` for a rename/copy — the two leading status characters, one space, then the
+// path(s). This module never passes `-z`, matching every other porcelain call site here, so this
+// is line-oriented on purpose. Returns BOTH sides of a rename, so a caller checking "every dirty
+// path is one of mine" cannot be fooled by a KB file renamed FROM or TO a name it doesn't expect.
+function porcelainPaths(line: string): string[] {
+  const rest = line.slice(3);
+  const arrow = rest.indexOf(" -> ");
+  if (arrow === -1) return [rest];
+  return [rest.slice(0, arrow), rest.slice(arrow + 4)];
+}
+
 // The live reference this content is copied from is a checked-out `.drawbar/runs/.gitignore`
 // (97 bytes) — never committed itself (the run-state files under it are local scratch), which
 // is exactly why an operator's very first run of this command can find it absent.
@@ -742,8 +870,8 @@ const RUNS_GITIGNORE_CONTENT =
 // gitignored, then the assert-or-create last.
 export function knowledgePreflight(input: PreflightInput): PreflightResult {
   const {
-    envDir, kbDir, git, configPath, expectedConfigPath, readConfig, realpath,
-    existsSync: exists, writeFileSync: writeFile, mkdirSync: mkdir,
+    envDir, kbDir, git, configPath, expectedConfigPath, readConfig, realpath, env,
+    existsSync: exists, writeFileSync: writeFile, mkdirSync: mkdir, readFileSync: readFile,
   } = input;
 
   if (!isCleanAbsolutePath(envDir)) return { ok: false, reason: "invalid_env_dir", detail: envDir };
@@ -766,24 +894,64 @@ export function knowledgePreflight(input: PreflightInput): PreflightResult {
     };
   }
 
+  // 0a. This story: the store `drawbar-kb path` resolves to from the trusted config's OWN
+  // `projectDir` must be this same `kbDir` — see `checkProjectStore`'s comment for the
+  // reproduced failure (a project config with no `memoryDir` silently falling back to a
+  // gitignored per-worktree directory in the PRODUCT repo). Run right after the trust/containment
+  // checks and before anything that touches envDir's git state, because a wrong store is a
+  // configuration-identity problem, not a repository-state one.
+  const projectStore = checkProjectStore({
+    envDir, kbDir, git, env, exists, readFile, projectDir: trust.config.projectDir,
+  });
+  if (!projectStore.ok) return projectStore;
+
+  // 0b. This story: a non-empty `knowledge.jsonl` in envDir's ROOT — the second reproduced
+  // failure (a caller passing envDir where --dir belonged). Cheap (no git call) and, like 0a,
+  // about which store is in play rather than that store's git state, so it runs before the
+  // git-state checks below.
+  const strayCheck = checkStrayEnvRootFile({ envDir, kbDir, exists, readFile });
+  if (!strayCheck.ok) return strayCheck;
+
+  const p = storePaths(kbDir);
+  const activeRel = relative(envDir, p.active);
+  const archiveRel = relative(envDir, p.archive);
+
   // 1. Knowledge repo dirty — same untracked-tolerant rule syncKnowledge's own precondition
   // uses. Without this, a preflight that passes while the KB is genuinely mid-write (a
   // tracked-file change never staged) tells nothing about whether step 6's rebase will hold.
+  //
+  // This story (REDD, first-hand): Locked 15's own header (top of this file, "why inline KB
+  // writes stay") says `knowledge.jsonl`/`knowledge.archive.jsonl` are dirty at UNPREDICTABLE
+  // times BY DESIGN — an inline `drawbar-kb add` mid-run — and `syncKnowledge` stages and
+  // commits exactly those two paths on every attempt regardless. Reproduced: another session's
+  // pending inline writes to those two files made THIS check refuse `knowledge_repo_dirty` and
+  // block a completely unrelated session's ship preflight, with nothing outside the two KB paths
+  // touched. So dirt confined EXACTLY to the two KB paths is expected, not a precondition
+  // failure; anything else dirty still refuses.
+  //
+  // "Confined to" is checked by EXACT relative-path match against `activeRel`/`archiveRel`, never
+  // a substring or prefix test — the same pathspec discipline the module-top F6 note documents
+  // (an imprecise match is how an unrelated file gets treated as accounted-for and swept past
+  // unnoticed). A rename/copy porcelain line (`R  old -> new`) is treated as KB-confined only when
+  // BOTH sides name a KB path; git never renames `syncKnowledge`'s own commits that way, so this
+  // is conservative rather than load-bearing.
   const statusRes = git(["-C", envDir, "status", "--porcelain", "--untracked-files=no"]);
   if (statusRes.code !== 0) {
     return { ok: false, reason: "status_failed", detail: statusRes.stderr };
   }
-  if (statusRes.stdout.trim().length > 0) {
+  const isKbPath = (path: string): boolean => path === activeRel || path === archiveRel;
+  const dirtyLines = statusRes.stdout.split("\n").filter((line) => line.length > 0);
+  const onlyKbPathsDirty = dirtyLines.every((line) => porcelainPaths(line).every(isKbPath));
+  if (!onlyKbPathsDirty) {
     return { ok: false, reason: "knowledge_repo_dirty", detail: statusRes.stdout };
   }
 
   // 2. `merge=union` on both paths. Both are checked (not just the active file) because this
   // story starts staging the archive too — without union on it, a concurrent archive-append
   // races into the same rebase failure the active file used to.
-  const p = storePaths(kbDir);
   const checks: Array<{ label: string; rel: string }> = [
-    { label: "knowledge.jsonl", rel: relative(envDir, p.active) },
-    { label: "knowledge.archive.jsonl", rel: relative(envDir, p.archive) },
+    { label: "knowledge.jsonl", rel: activeRel },
+    { label: "knowledge.archive.jsonl", rel: archiveRel },
   ];
   for (const { label, rel } of checks) {
     const attrRes = git(["-C", envDir, "check-attr", "merge", "--", rel]);
@@ -999,6 +1167,9 @@ export interface MainDeps {
   mkdirSync?: (p: string, opts: { recursive: boolean }) => void;
   // R5/F2: the config-file read seam, so a test can drive the trust root without a real file.
   readConfig?: (p: string) => string;
+  // This story: the seam `checkProjectStore`/`checkStrayEnvRootFile` need — readFileSync for a
+  // project config or a stray file. They reuse `env` above for `resolveContext`'s own precedence.
+  readFileSync?: (p: string) => string;
 }
 
 export async function main(deps: MainDeps = {}): Promise<number> {
@@ -1012,6 +1183,7 @@ export async function main(deps: MainDeps = {}): Promise<number> {
   const writeFileSyncDep = deps.writeFileSync ?? writeFileSync;
   const mkdirSyncDep = deps.mkdirSync ?? mkdirSync;
   const readConfig = deps.readConfig ?? ((p: string) => readFileSync(p, "utf8"));
+  const readFileSyncDep = deps.readFileSync ?? ((p: string) => readFileSync(p, "utf8"));
   const realpath = deps.realpath ?? ((p: string) => realpathSync(p));
   // R7: the anchor. Same primitive `ship-config.ts validate` uses for its own default, never a
   // second copy of the `$DRAWBAR_SHIP_CONFIG` / `<cwd>/.drawbar/ship.config.json` rule.
@@ -1122,6 +1294,8 @@ export async function main(deps: MainDeps = {}): Promise<number> {
       existsSync: existsSyncDep,
       writeFileSync: writeFileSyncDep,
       mkdirSync: mkdirSyncDep,
+      env: deps.env ?? process.env,
+      readFileSync: readFileSyncDep,
     });
     if (!result.ok) {
       writeStderr(`refused: ${result.reason}${result.detail !== undefined ? `: ${JSON.stringify(sanitizeForOutput(result.detail))}` : ""}\n`);
