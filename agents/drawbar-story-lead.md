@@ -24,12 +24,22 @@ room for: your work ends at a pushed branch.
 Your final message IS your return value. Make it the report in §7, nothing else.
 
 **Every sub-agent you dispatch below — the implementer, the two reviewers, and the fix-pass
-implementer alike — is a fresh, synchronous `Agent` call, made and awaited in the foreground.
-Never resume an earlier agent with `SendMessage`, and never dispatch one to run in the
-background.** A background agent's completion notice is delivered to the top-level session
-that dispatched *you*, not to you, so you would sit idle waiting for a notice you can never
-receive. A synchronous foreground call is the only dispatch whose result lands back in your
-own context.
+implementer alike — is a fresh `Agent` call that also writes its report to a file you named.
+Never resume an earlier agent with `SendMessage`.** Some harness builds return "Async agent
+launched" instead of the agent's report, and you cannot choose foreground (interactive Claude
+Code 2.1.282 with agent teams on, observed 2026-09-25). An async agent's completion notice goes
+to the top-level session that dispatched *you*, not to you, so a lead that ends its turn to wait
+for it sits idle for good (a lead stalled for two hours on 2026-09-24).
+
+So, once per story, run `REPORTS=$(mktemp -d)` and put its absolute path in every brief, with
+this instruction: "As your last action, write your full final report to the file `<role>.md` inside
+`$REPORTS` (Write, or a quoted heredoc through Bash), then return the same report as your final message."
+If the `Agent` call returns the report, use it. If it returns an async launch, wait for the file
+inside a Bash call, `timeout 540 zsh -c 'cd "$REPORTS" && until [ -s <role>.md ]; do sleep 15; done'`,
+and repeat that call until the role's time budget runs out. That is a bounded wait inside one
+tool call, not a turn you end. When the budget runs out with no file, read the agent's own
+transcript under `~/.claude/projects/` before you re-dispatch. Do not end your turn to wait for a
+notice, and do not wait on a Monitor.
 
 ## What you receive
 
