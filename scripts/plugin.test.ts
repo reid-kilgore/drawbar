@@ -6941,6 +6941,14 @@ const SH4_PROSE: readonly string[] = [
       "beside `file:line` because it is the same location in structured form: a serializer that " +
       "drops `detail` and emits the key has published the location anyway, and a ban worded " +
       "against one spelling is not a ban on the field.",
+    "**A story that changed something a person sees carries its screenshots in the PR body " +
+      "(Reid, 2026-09-26: \"all the prs that have visual components mUST have screenshots\").** " +
+      "Build a `## Screenshots` section before `gh pr create` runs, linking each path in the " +
+      "story-lead's `screenshots` by its GitHub file URL at `head_sha`, with its `shows` text. " +
+      "When the report instead carries `no_visual_change`, the body says `No visual change:` and " +
+      "that reason. After the PR opens, run `pr-screenshot-check <pr> -R <repo>` (from the " +
+      "meta-agent repo, on PATH): exit 1 means a visual change went out without images, and the " +
+      "story is reported flagged, never ok.",
     "**Every PR body opens with a review-provenance line, on a flagged story and a clean one " +
       "alike**, built before `gh pr create` runs: `reviewed at <reviewed_sha> from " +
       "<spec_source>; N commits since`, where `<reviewed_sha>` is what the reviewers read, " +
@@ -7097,7 +7105,7 @@ const SHIP_PINNED_ELSEWHERE: readonly string[] = [
     "\\\"brief\\\" and no story can come back clean\"",
   "It returns the JSON report in its §7: `{story, status, branch, base, parked_reason, " +
     "spec_source, reviewed_sha, head_sha, findings, dedup, mutation_pairs, out_of_scope, " +
-    "false_claims, lessons, summary}`. It carries no " +
+    "false_claims, lessons, screenshots, no_visual_change, summary}`. It carries no " +
     "`pr` — it opens none; §4 below is what opens the PR and learns its number. **Do not ask it " +
     "for the diff.** If you find yourself wanting one, the split is not working.",
   "cat > \"$PR_BODY_FILE\" <<'DRAWBAR_PR_BODY_SENTINEL' <the PR body, verbatim — nothing here " +
@@ -7254,6 +7262,16 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
   test("story-lead §6 carries exactly these units and nothing else", () => {
     expect(docUnits(docSection(SL_374, SL6))).toEqual([
       "## 6. Commit and push",
+      "**A story that changes something a person sees carries screenshots (Reid, 2026-09-26: " +
+        "\"all the prs that have visual components mUST have screenshots\").** When the diff touches " +
+        "components, styles or copy under `frontend/`, `admin-ui/`, `mobile-web/` or `tablet/`, " +
+        "capture a before and an after image of each changed screen, from the repository's own dev " +
+        "harness or dev server, before this commit. Save them under a `screenshots` folder named for " +
+        "the story, as numbered files like `NN-<what-it-shows>.png`, so they are committed with the " +
+        "work, and list them in your report's `screenshots`. If those paths changed but nothing a " +
+        "person sees did (a refactor, a type), leave `screenshots` empty and put the reason in " +
+        "`no_visual_change`. Your caller links each image in the pull request body and refuses the " +
+        "story if a visual change has neither.",
       "```bash git -C \"$PROJECT_DIR\" add -A git -C \"$PROJECT_DIR\" commit -m \"<type>: <summary> " +
         "(<STORY>)\" # hooks run — never --no-verify git -C \"$PROJECT_DIR\" push -u origin " +
         "\"$BRANCH\" ```",
@@ -7286,7 +7304,9 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
         "\"out_of_scope\": [{\"title\": \"...\", \"detail\": \"file and symbol, what is wrong, why out of " +
         "scope\"}], \"false_claims\": [{\"claim\": \"...\", \"contradicted_by\": \"file and symbol\", \"evidence\": \"what the code says\"}], " +
         "\"lessons\": [{\"key\": \"kebab-key\", \"type\": \"learned\", \"content\": \"...\", \"tags\": " +
-        "[\"...\"]}], \"summary\": \"two or three sentences\" } ```",
+        "[\"...\"]}], \"screenshots\": [{\"path\": \"<screenshots-path>/NN-name.png\", \"shows\": " +
+        "\"before | after: what it shows\"}], \"no_visual_change\": null, \"summary\": \"two or three " +
+        "sentences\" } ```",
       "**`false_claims` carries what the implementer or a reviewer found to be untrue in the brief " +
         "or the story record** — a claim about the code that the code contradicts. Copy each one " +
         "through with its `contradicted_by` evidence; an empty array is the normal case and says " +
