@@ -525,7 +525,7 @@ as above. The brief must carry:
 - that it must **not** merge and has no Linear authority
 
 It returns the JSON report in its §7: `{story, status, branch, base, parked_reason, spec_source,
-reviewed_sha, head_sha, findings, dedup, mutation_pairs, out_of_scope, false_claims, lessons, summary}`. It carries no `pr` — it opens none; §4 below is what opens
+reviewed_sha, head_sha, findings, dedup, mutation_pairs, out_of_scope, false_claims, lessons, screenshots, no_visual_change, summary}`. It carries no `pr` — it opens none; §4 below is what opens
 the PR and learns its number. **Do not ask it for the diff.** If you find yourself wanting
 one, the split is not working.
 
@@ -640,6 +640,13 @@ public PR body announces an unpatched detail to every repo watcher before the op
 morning review. The `dedup_key` is named here beside `file:line` because it is the same
 location in structured form: a serializer that drops `detail` and emits the key has published
 the location anyway, and a ban worded against one spelling is not a ban on the field.
+
+**A story that changed something a person sees carries its screenshots in the PR body (Reid, 2026-09-26: "all the prs that have visual components mUST have screenshots").**
+Build a `## Screenshots` section before `gh pr create` runs, linking each path in the story-lead's
+`screenshots` by its GitHub file URL at `head_sha`, with
+its `shows` text. When the report instead carries `no_visual_change`, the body says `No visual change:` and
+that reason. After the PR opens, run `pr-screenshot-check <pr> -R <repo>` (from the meta-agent repo, on PATH):
+exit 1 means a visual change went out without images, and the story is reported flagged, never ok.
 
 **Every PR body opens with a review-provenance line, on a flagged story and a clean one alike**,
 built before `gh pr create` runs: `reviewed at <reviewed_sha> from <spec_source>; N commits since`,
