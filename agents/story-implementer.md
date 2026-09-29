@@ -2,6 +2,7 @@
 name: story-implementer
 description: Implements one drawbar story test-first on Sonnet, in strict red→green increments, and returns a structured report. Does not open PRs, move Linear status, or run reviews — the lead session owns all of that.
 model: sonnet
+codex-model: gpt-5.6-terra
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 

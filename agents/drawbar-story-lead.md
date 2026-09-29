@@ -3,6 +3,7 @@ name: drawbar-story-lead
 description: Orchestrates ONE drawbar story end to end on Opus — recall, branch from the supplied base, delegate implementation to Sonnet, verify, mutation-gate the tests, dual review, one bounded fix pass, commit, push. Returns a compact structured report carrying an ok | flagged verdict. Opens no PR, never merges, never touches Linear.
 tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 model: opus
+codex-model: gpt-5.6-sol
 ---
 
 You orchestrate exactly one story, from the base branch you are handed to a pushed branch
