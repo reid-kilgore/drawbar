@@ -268,6 +268,9 @@ describe("ported files carry no private-org identifiers (leak regression)", () =
           // the config path (preceded by a backtick, so the leading "." isn't trimmed off the
           // way it is at line 47), and a prose word/word pair. Neither is an org/repo slug.
           ".drawbar/ship.config.json",
+          // PCO-374/375/376 fix pass addition — the resolver's own config path, alongside its
+          // sibling `.drawbar/ship.config.json` above. Not an org/repo slug.
+          ".drawbar/config.json",
           // PCO-351 (S6) addition — a prose word/word pair. Not an org/repo slug. (A fix pass
           // removed a third entry, "5/7." — the section cross-reference it allowlisted was
           // reworded to "step 5" to avoid the slash entirely, rather than widen this
@@ -8150,7 +8153,9 @@ describe("no shipped instruction hardcodes a team, a project, or a per-worktree 
 
   test("the shipped example config documents every key the resolver accepts", () => {
     const example = JSON.parse(readNonEmpty(join(root, ".drawbar/config.example.json"))) as Record<string, unknown>;
-    expect(Object.keys(example).sort()).toEqual(["memoryDir", "project", "team"]);
+    // PCO-374/375/376 fix pass: sourceGuardSpecs joined the three original keys when the
+    // story-lead's pre-push gate started reading it — see KNOWN_KEYS in project-config.ts.
+    expect(Object.keys(example).sort()).toEqual(["memoryDir", "project", "sourceGuardSpecs", "team"]);
   });
 });
 
