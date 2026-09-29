@@ -7201,11 +7201,16 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
     expect(docUnits(docSection(SL_374, SL5))).toEqual([
       "## 5. Review, and exactly one fix pass",
       "Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one message. " +
-        "Give the code reviewer the acceptance criteria; give the security reviewer `$KB`. Give " +
-        "both the story's Linear issue id — each reads the spec from Linear itself, because the " +
-        "brief you wrote is a summary and a summary cannot carry what the spec struck — and give " +
-        "both `$PROJECT_DIR`, because each reads its own `reviewed_sha` off the tree with `git " +
-        "-C` and a subagent's working directory is not guaranteed to be the project's.",
+        "Give each `model: \"opus\"` named explicitly in your `Agent` call so you never have to " +
+        "search for their definition files. Drawbar's agents are at `~/.claude/skills/drawbar/agents/` " +
+        "on Reid's laptops, not under `~/.claude/plugins/`. A lookup that fails is not a reason to " +
+        "choose a different model: one lead on 2026-09-29 searched only `~/.claude/plugins/`, found " +
+        "nothing, and ran both reviews on Sonnet. Give the code reviewer the acceptance criteria; " +
+        "give the security reviewer `$KB`. Give both the story's Linear issue id — each reads the " +
+        "spec from Linear itself, because the brief you wrote is a summary and a summary cannot " +
+        "carry what the spec struck — and give both `$PROJECT_DIR`, because each reads its own " +
+        "`reviewed_sha` off the tree with `git -C` and a subagent's working directory is not " +
+        "guaranteed to be the project's.",
       "**A malformed reviewer report is not an approval — it is a failed review, and it parks " +
         "the story.** A report is malformed when it omits `spec_source`, omits `reviewed_sha`, " +
         "carries a finding without a `dedup_key`, or — from the security-reviewer alone, whose " +

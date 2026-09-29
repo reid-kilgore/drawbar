@@ -149,7 +149,7 @@ a claim cannot be falsified cheaply, downgrade it to an instruction: "check whet
 accordingly" rather than "X is true, do Y."
 
 
-Dispatch the **`story-implementer`** agent (Sonnet) to build the story test-first. Hand it
+Dispatch the **`story-implementer`** agent, with `model: "sonnet"` named explicitly, to build the story test-first. Hand it
 the acceptance criteria, every `Locked` / `MUST-CHECK:` verbatim, and `$KB`. Require it to
 show the RED run, and tell it not to commit, push, open a pull request, or run reviews.
 
@@ -264,7 +264,11 @@ If a mutation produces no failure, that is a missing test. Send it back before r
 
 ## 5. Review, and exactly one fix pass
 
-Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one message.
+Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one message. Give each
+`model: "opus"` named explicitly in your `Agent` call so you never have to search for their
+definition files. Drawbar's agents are at `~/.claude/skills/drawbar/agents/` on Reid's laptops,
+not under `~/.claude/plugins/`. A lookup that fails is not a reason to choose a different model: one
+lead on 2026-09-29 searched only `~/.claude/plugins/`, found nothing, and ran both reviews on Sonnet.
 Give the code reviewer the acceptance criteria; give the security reviewer `$KB`. Give both the
 story's Linear issue id — each reads the spec from Linear itself, because the brief you wrote is a
 summary and a summary cannot carry what the spec struck — and give both `$PROJECT_DIR`, because each
