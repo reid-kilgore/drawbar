@@ -18,6 +18,15 @@
 //     (`base` still an ancestor of `branch`) — a rebase of a predecessor between runs is
 //     exactly the crash-resume failure mode this exists to catch.
 //
+//     Trunk link (stack[0] only): the first story's base is the configured trunk, and several
+//     sessions may share one checkout and fast-forward its LOCAL trunk branch at any time.
+//     Judging stack[0] against local `refs/heads/<baseBranch>` therefore refused every other run's
+//     intact stack as `branch_moved` after each fast-forward. The trunk moving forward is
+//     harmless; what is a hazard is an INNER link breaking (story N+1 no longer on story N). So
+//     stack[0] is judged against the remote-tracking ref `refs/remotes/origin/<baseBranch>`
+//     instead, and only for (b) existence, (c) a merge base exists (related history), and (d) at
+//     least one commit beyond it. Inner links (i > 0) are unchanged. The caller fetches first.
+//
 //     Scope (IMPORTANT 4): every git-backed check above reads LOCAL refs
 //     (`refs/heads/<name>`) in the clone at `projectDir` — this module never fetches. The
 //     design is about pushed branches with GitHub PRs stacked on them; a remote force-push of
@@ -151,7 +160,8 @@ export type ChainResult = { ok: true } | { ok: false; reason: ChainReason; detai
 //              missing; any OTHER non-zero exit (128 observed for a missing/corrupt repo) is
 //              a git ERROR and routes to `git_failed`, never misread as "missing" (IMPORTANT 1
 //              — a deleted/moved `projectDir` must not present as an ordinary absent branch).
-//   4. (git)   `rev-parse --verify --quiet refs/heads/<base>` — same distinction as (3).
+//   4. (git)   `rev-parse --verify --quiet refs/heads/<base>` — same distinction as (3). For
+//              i === 0 the ref checked is `refs/remotes/origin/<base>` (see "Trunk link").
 //   5. (git)   `merge-base --is-ancestor refs/heads/<base> refs/heads/<branch>` — both
 //              arguments fully qualified (CRITICAL 2): git's ref disambiguation order puts
 //              `refs/tags/<x>` ahead of `refs/heads/<x>`, so a bare name here would let a tag
@@ -163,7 +173,11 @@ export type ChainResult = { ok: true } | { ok: false; reason: ChainReason; detai
 //              two unrelated histories) — that is "moved," not a git error; any OTHER
 //              non-zero exit (128 observed for a bogus/missing ref) is a git ERROR and must
 //              route to `git_failed`, never be misread as "moved" (a broken repository must
-//              not silently present as an ordinary rebase).
+//              not silently present as an ordinary rebase). For i === 0 this step is instead
+//              `merge-base refs/remotes/origin/<base> refs/heads/<branch>` (no `--is-ancestor`):
+//              exit 0 prints a merge base, exit 1 means no merge base (unrelated histories, ->
+//              `branch_moved`), any other non-zero exit is `git_failed` — verified on real git
+//              2.53.0 (exit 1 for two orphan histories, 128 for a bogus ref or missing repo).
 //
 // `projectDir` is validated with `isCleanAbsolutePath` before any git call at all. The CLI
 // entry point below requires it as an operator-supplied `--project-dir` flag and refuses
@@ -197,6 +211,10 @@ export function assertChainIntact(
       };
     }
 
+    // stack[0] is judged against the remote-tracking trunk, every later link against its local
+    // predecessor branch. Fully qualified either way (git-ref-disambiguation MUST-CHECK).
+    const baseRef = i === 0 ? `refs/remotes/origin/${entry.base}` : `refs/heads/${entry.base}`;
+
     const branchRes = git(["-C", projectDir, "rev-parse", "--verify", "--quiet", `refs/heads/${entry.branch}`]);
     if (branchRes.code === 1) {
       return {
@@ -212,42 +230,43 @@ export function assertChainIntact(
         detail: branchRes.stderr || `git rev-parse failed for refs/heads/${entry.branch} with exit code ${branchRes.code}`,
       };
     }
-    const baseRes = git(["-C", projectDir, "rev-parse", "--verify", "--quiet", `refs/heads/${entry.base}`]);
+    const baseRes = git(["-C", projectDir, "rev-parse", "--verify", "--quiet", baseRef]);
     if (baseRes.code === 1) {
       return {
         ok: false,
         reason: "base_missing",
-        detail: `stack[${i}] (${entry.story}) base "${entry.base}" does not exist at ${projectDir}`,
+        detail: `stack[${i}] (${entry.story}) base "${entry.base}" does not exist at ${projectDir}${i === 0 ? " (expected remote-tracking ref " + baseRef + "; fetch it first)" : ""}`,
       };
     }
     if (baseRes.code !== 0) {
       return {
         ok: false,
         reason: "git_failed",
-        detail: baseRes.stderr || `git rev-parse failed for refs/heads/${entry.base} with exit code ${baseRes.code}`,
+        detail: baseRes.stderr || `git rev-parse failed for ${baseRef} with exit code ${baseRes.code}`,
       };
     }
 
-    const ancestorRes = git([
-      "-C",
-      projectDir,
-      "merge-base",
-      "--is-ancestor",
-      `refs/heads/${entry.base}`,
-      `refs/heads/${entry.branch}`,
-    ]);
+    // i === 0: related history only (the trunk may have moved on). i > 0: strict ancestry.
+    const ancestorRes = git(
+      i === 0
+        ? ["-C", projectDir, "merge-base", baseRef, `refs/heads/${entry.branch}`]
+        : ["-C", projectDir, "merge-base", "--is-ancestor", baseRef, `refs/heads/${entry.branch}`],
+    );
     if (ancestorRes.code === 1) {
       return {
         ok: false,
         reason: "branch_moved",
-        detail: `stack[${i}] (${entry.story}) base "${entry.base}" is no longer an ancestor of "${entry.branch}"`,
+        detail:
+          i === 0
+            ? `stack[${i}] (${entry.story}) branch "${entry.branch}" shares no history with the trunk "${entry.base}"`
+            : `stack[${i}] (${entry.story}) base "${entry.base}" is no longer an ancestor of "${entry.branch}"`,
       };
     }
     if (ancestorRes.code !== 0) {
       return {
         ok: false,
         reason: "git_failed",
-        detail: ancestorRes.stderr || `git merge-base --is-ancestor failed with exit code ${ancestorRes.code}`,
+        detail: ancestorRes.stderr || `git merge-base failed with exit code ${ancestorRes.code}`,
       };
     }
 
@@ -282,7 +301,7 @@ export function assertChainIntact(
       projectDir,
       "rev-list",
       "--count",
-      `refs/heads/${entry.base}..refs/heads/${entry.branch}`,
+      `${baseRef}..refs/heads/${entry.branch}`,
       "--",
     ]);
     if (countRes.code !== 0) {
@@ -297,7 +316,7 @@ export function assertChainIntact(
       return {
         ok: false,
         reason: "git_failed",
-        detail: `git rev-list --count returned unparseable output for refs/heads/${entry.base}..refs/heads/${entry.branch}`,
+        detail: `git rev-list --count returned unparseable output for ${baseRef}..refs/heads/${entry.branch}`,
       };
     }
     if (count === 0) {
