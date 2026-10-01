@@ -448,6 +448,13 @@ failed story and three garbage PRs stacked on nothing. `assert-chain` refuses it
 `branch_commitless` — a reason deliberately distinct from `branch_moved`, because a commitless
 branch is safe to reset and a moved one never is.
 
+The first story's link to the trunk is judged against the remote-tracking ref
+`refs/remotes/origin/<baseBranch>`, not the local trunk branch: several sessions may share one checkout and
+fast-forward the local trunk at any time, and the trunk moving forward is harmless. The caller
+fetches first (the gate below does), and a failed fetch refuses rather than passing on stale
+data. Links between stories are still checked against their local predecessor branch, exactly as
+before.
+
 This gate is **executable, not advisory**. A rule stated only in prose can be reasoned past;
 this one refuses.
 
@@ -476,11 +483,18 @@ RESOLVED=$(echo "$LINEAR_FACTS_JSON" | bun run "${CLAUDE_PLUGIN_ROOT}/scripts/li
   || { echo "FATAL: ship-config validation refused — see stderr above."; exit 1; }
 ENV_DIR=$(echo "$RESOLVED" | jq -r '.envDir // empty')
 PROJECT_DIR=$(echo "$RESOLVED" | jq -r '.projectDir // empty')
-for v in ENV_DIR PROJECT_DIR; do
+BASE_BRANCH=$(echo "$RESOLVED" | jq -r '.baseBranch // empty')
+for v in ENV_DIR PROJECT_DIR BASE_BRANCH; do
   val="${!v}"
   [ -n "$val" ] && [ "$val" != "null" ] || { echo "FATAL: $v is empty or null after validation — refusing."; exit 1; }
 done
 STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
+
+# `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it
+# here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a
+# story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+  || { echo "NO_DISPATCH: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 
 # Echo `.reason` and NOTHING else — `.detail` carries absolute paths and the real repo slug,
 # and this repo is public.
@@ -862,6 +876,11 @@ STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
 
 # Check 1 of 3 — chain integrity. `--project-dir` is the operator-authored trust root, taken
 # from the fresh validate above, never from the state file's own `resolved_config` copy.
+# `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it
+# here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a
+# story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+  || { echo "NO_PR: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 CHAIN_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" assert-chain --state "$STATE" --project-dir "$PROJECT_DIR")
 CHAIN_OK=$(printf '%s' "${CHAIN_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then "true" else "false" end' 2>/dev/null)
 # Echo the verdict's `.reason` and NOTHING else. `.detail` carries absolute paths and the real
@@ -889,9 +908,10 @@ PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(
 else
 # `gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a
 # subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this
-# fence uses, never `$PWD` on its own. `assert-chain` above already confirmed `$BASE` (this
-# story's real parent) is an ancestor branch that exists, so `gt track` is only ever told a
-# parent this fence has already verified.
+# fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch;
+# `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain,
+# so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it
+# checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.)
 git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
   || { echo "NO_PR: could not check out $BRANCH to track it with Graphite — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
 ( cd "$PROJECT_DIR" && gt track --parent "$BASE" ) \
@@ -950,6 +970,8 @@ printf '%s\n' "$NEXT_STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE" || { echo
 # Round-trip what was just written through `parseRunState` — `assert-chain` parses the state
 # with it and re-verifies the chain including the entry appended above. A wrong JSON type is
 # caught HERE, in the step that wrote it, instead of bricking every later read.
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+  || { echo "PR_UNRECORDED: could not fetch origin/$BASE_BRANCH for the round-trip check — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 VERIFY_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" assert-chain --state "$STATE" --project-dir "$PROJECT_DIR")
 VERIFY_OK=$(printf '%s' "${VERIFY_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then "true" else "false" end' 2>/dev/null)
 [ "$VERIFY_OK" = "true" ] || { VERIFY_REASON=$(printf '%s' "${VERIFY_JSON:-null}" | jq -r '.reason // "unreadable-verdict"' 2>/dev/null); echo "PR_UNRECORDED: the recorded stack entry did not round-trip ($VERIFY_REASON) — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
@@ -1213,12 +1235,17 @@ worse than any delay.
    # --- derive from the resolved config (crash recovery) --------------------------------------
    ENV_DIR=$(echo "$RESOLVED" | jq -r '.envDir // empty')
    PROJECT_DIR=$(echo "$RESOLVED" | jq -r '.projectDir // empty')
-   for v in ENV_DIR PROJECT_DIR; do
+   BASE_BRANCH=$(echo "$RESOLVED" | jq -r '.baseBranch // empty')
+   for v in ENV_DIR PROJECT_DIR BASE_BRANCH; do
      val="${!v}"
      [ -n "$val" ] && [ "$val" != "null" ] || { echo "FATAL: $v is empty or null after validation — refusing."; exit 1; }
    done
    # --- end derive from the resolved config (crash recovery) ----------------------------------
    STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
+
+   # Fetch the trunk ref `assert-chain` judges stack[0] against (it never fetches). A failed fetch refuses.
+   git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+     || { echo "PARK: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 
    # Chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh
    # validate above, never from the state file's own `resolved_config` copy. Echo the verdict's
@@ -1335,7 +1362,7 @@ then `ScheduleWakeup({stop: true})`.
   for every story after that (Locked A). Never re-derive it in bash, never read it out of the
   run-state file by hand, and never omit `--base`.
 - **Never dispatch story N+1 onto a branch with no commits.** §2's `assert-chain` gate runs
-  before every dispatch and refuses `branch_commitless`. That reason is distinct from
+  before every dispatch (after fetching the remote-tracking trunk) and refuses `branch_commitless`. That reason is distinct from
   `branch_moved` on purpose: a commitless branch is safe to reset, a moved one never is.
 - **The orchestrator performs no git write against a worktree an agent holds.** A plain
   `git push` from the orchestrator once ran the pre-push hook against a worktree an implementer
