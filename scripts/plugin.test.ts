@@ -1046,13 +1046,29 @@ describe("in_flight is cleared at the two surviving Locked-13 narrative sites in
     expect(crashSection).toContain("**clear `in_flight`** (`in_flight: null`) before halting");
   });
 
-  // REGRESSION (Important 4, PCO-364 R1): §7 used to falsely claim the deleted §5 already
-  // cleared `in_flight` on report. Pin the honest gap statement and reject the false claim's
-  // reintroduction.
-  test("'## 7. Advance' states the report-site in_flight gap honestly, not the false §5 claim", () => {
+  // Step 7 used to leave `in_flight` set after a success, which stalled the next dispatch for
+  // 20+ minutes per story. It now clears in the same write that appends to `stories_done`.
+  test("'## 7. Advance' clears in_flight in the same write that appends to stories_done", () => {
     const advanceSection = section("## 7. Advance", "## Parking a story");
     expect(advanceSection).not.toContain("step 5 already cleared it");
-    expect(advanceSection).toContain("`in_flight` is **not** cleared here");
+    expect(advanceSection).not.toContain("`in_flight` is **not** cleared here");
+    expect(advanceSection).toContain("Append the story to `stories_done` **and set `in_flight` to `null` in that same state write**");
+    expect(advanceSection).toContain("a crash before this write still leaves `in_flight` set and routes to *Crash recovery*");
+  });
+
+  test("step 2 treats an in_flight whose story is in stories_done and stacked as spent", () => {
+    const dispatch = section("## 2. Delegate the whole story", "## 3. File out-of-scope");
+    expect(dispatch).toContain("already in `stories_done` and has a `stack` entry");
+  });
+
+  // On Reid's laptops `ls` is an alias for eza, whose `-t` takes a field argument; a bare
+  // `ls -t` finds nothing and the liveness test misreads a live lead.
+  test("the liveness commands never call a bare ls", () => {
+    const doc = readNonEmpty(join(root, "commands/drawbar-ship.md"));
+    const lsTimeLines = doc.split("\n").filter((l) => /\bls -t\b/.test(l));
+    expect(lsTimeLines.length).toBeGreaterThan(0);
+    for (const l of lsTimeLines) expect(l).toContain("command ls -t");
+    expect(doc).not.toMatch(/(^|[^d] )ls -t/m);
   });
 });
 
@@ -4416,7 +4432,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
     },
     {
       doc: "ship",
-      anchor: "not** cleared here — §5 (post the summary comment) does not clear it either",
+      anchor: "because §5 (post the summary comment) and the knowledge sync already ran",
       ns: [{ n: 5, title: "Post the summary comment" }],
     },
     // Crash recovery's step 4 (fix pass): the already-stacked resume target. The reference and

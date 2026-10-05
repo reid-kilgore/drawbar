@@ -353,8 +353,8 @@ export function parseRunState(text: string): ParseResult {
 
 // --- in_flight: the authoritative duplicate-dispatch guard, with a staleness escape --------
 //
-// Locked 13. `in_flight` is written at dispatch (step 2) and cleared on report, park, or halt
-// (steps 5/7, "Parking a story", "Crash recovery" — see commands/drawbar-ship.md). A second
+// Locked 13. `in_flight` is written at dispatch (step 2) and cleared at Advance, park, or halt
+// (step 7, "Parking a story", "Crash recovery" — see commands/drawbar-ship.md). A second
 // invocation while it is still fresh must no-op WITHOUT dispatching a second agent. But a
 // crashed run leaves `in_flight` set forever unless something notices — so once
 // `now - agent_dispatched_at` EXCEEDS 2x the heartbeat, the correct response is to route to
@@ -405,12 +405,31 @@ const FUTURE_TIMESTAMP_TOLERANCE_SECONDS = 5;
 // (`undefined`) `in_flight` the same as an explicit `null` (Minor fix — a missing key must
 // route to Preflight's "must route here rather than dying" discipline, not throw), then
 // validate the timestamp before ever computing `elapsedSeconds` from it.
-export function dispatchVerdict(state: Pick<RunState, "in_flight">, now: number, heartbeatSeconds: number): DispatchVerdict {
+//
+// A finished story's claim is spent: when `in_flight.story` is already in `stories_done` AND
+// has a `stack[]` entry, the story reached Advance and the lead has nothing left to do, so the
+// verdict is `dispatch` whatever the claim's age or timestamp. Step 7 clears `in_flight` in the
+// same write that appends to `stories_done`; this check is the backstop for a missed clear or a
+// state file written by an older runbook. Both fields are required together — a story in
+// `stories_done` with no stack entry is not provably finished and keeps the normal paths.
+// Absent `stories_done` / `stack` are read as empty, so a caller holding only `in_flight` is
+// unchanged.
+export function dispatchVerdict(
+  state: Pick<RunState, "in_flight"> & Partial<Pick<RunState, "stories_done" | "stack">>,
+  now: number,
+  heartbeatSeconds: number,
+): DispatchVerdict {
   if (!isValidHeartbeatSeconds(heartbeatSeconds)) {
     return { action: "refused", reason: "invalid_heartbeat_seconds" };
   }
   const inFlight = state.in_flight ?? null;
   if (inFlight === null) return { action: "dispatch" };
+  if (
+    (state.stories_done ?? []).includes(inFlight.story) &&
+    (state.stack ?? []).some((entry) => entry.story === inFlight.story)
+  ) {
+    return { action: "dispatch" };
+  }
 
   const dispatchedAt = Date.parse(inFlight.agent_dispatched_at);
   if (!Number.isFinite(dispatchedAt)) {
@@ -481,10 +500,8 @@ export function maybeDispatch(input: MaybeDispatchInput): MaybeDispatchResult {
   return { verdict, nextState };
 }
 
-// Clears `in_flight` — called on park ("Parking a story") and on halt ("Crash recovery"),
-// per Locked 13. The step-5/7 report-site clear this comment used to describe was deleted
-// along with the merge path (commands/drawbar-ship.md now says explicitly the report site
-// does NOT clear); one function, two surviving call sites.
+// Clears `in_flight` — called on park ("Parking a story"), on halt ("Crash recovery"), and at
+// Advance (step 7, in the same write that appends to `stories_done`), per Locked 13.
 export function clearInFlight(state: RunState): RunState {
   return { ...state, in_flight: null };
 }
