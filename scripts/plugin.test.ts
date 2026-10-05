@@ -1185,7 +1185,7 @@ describe("PCO-352 S7: blocker gate clauses, Locked-11 halt, Unplanned filing", (
     });
   });
 
-  describe("step 1's blocker rule carries its three clauses (Locked 9)", () => {
+  describe("step 1's blocker rule carries its four clauses (Locked 9)", () => {
     function step1(): string {
       return slice("## 1.", "## 2.");
     }
@@ -1208,6 +1208,20 @@ describe("PCO-352 S7: blocker gate clauses, Locked-11 halt, Unplanned filing", (
         "the **unsatisfied** blocker is **itself a member of this snapshot** and not yet in `stories_done`",
       );
       expect(s1).toContain("**Re-sort and continue**");
+    });
+
+    test("clause 4: a blocker done in this run, anywhere in stack[], clears it", () => {
+      const s1 = step1();
+      expect(s1).toContain("exactly one of the following four");
+      expect(s1).toContain("Clauses 1, 2 and 4 **clear** the blocker");
+      expect(s1).toContain("the blocker is in `stories_done` of **this run**");
+      const flat = s1.replace(/\s+/g, " ");
+      expect(flat).toContain("**any** entry, not only the last");
+      expect(flat).toContain("relies on the chain being intact");
+      expect(flat).toContain("step 2's `assert-chain` gate proves");
+      expect(flat).not.toContain("that entry is the **last** one in `stack[]`");
+      expect(flat).toContain("A blocker outside the snapshot, or in the snapshot but not done in this run, keeps today's behavior");
+      expect(s1).toContain("Clause 4 exists because step 5 leaves every story `In Progress`");
     });
 
     // Critical 4 (fix pass): clause 3 sat inside the "satisfies the gate" list, reading as

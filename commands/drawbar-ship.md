@@ -314,8 +314,8 @@ deliberately **not** added to it.
 Next id in the snapshot not in `stories_done`, whose Linear status is still `Todo`.
 Snapshot exhausted → go to *Finishing the run*.
 
-**Blocker rule.** A `blockedBy` relation is resolved by exactly one of the following three
-clauses — but they do not all mean the same thing. Clauses 1-2 **clear** the blocker: the
+**Blocker rule.** A `blockedBy` relation is resolved by exactly one of the following four
+clauses — but they do not all mean the same thing. Clauses 1, 2 and 4 **clear** the blocker: the
 gate is satisfied, proceed with the current story. Clause 3 is different in kind, not just in
 number: it means your **pick** was wrong, not that the blocker cleared — its outcome is
 **re-pick, never proceed**.
@@ -336,12 +336,31 @@ number: it means your **pick** was wrong, not that the blocker cleared — its o
    the pick unchanged. Comparing against the immediately-previous pick alone misses a
    two-cycle: a mid-run `A blockedBy B` plus `B blockedBy A` yields X→Y→X→Y, where every
    re-sort *does* change the pick and a previous-pick-only terminator never fires.
+4. **(stacked on the blocker)** the blocker is in `stories_done` of **this run**, **and** the
+   run state's `stack[]` holds an entry for it (its PR was opened in this run) — **any** entry,
+   not only the last. The stack is linear and the current story's base is the last entry's
+   branch, so a blocker anywhere in `stack[]` is already beneath the current story. This
+   relies on the chain being intact: step 2's `assert-chain` gate proves, before every
+   dispatch, that each entry is an ancestor of the next, and a refusal there parks the story
+   before this clause matters. Membership in `stories_done` is **exact, case-sensitive
+   equality**, as in clause 3. The blocker's Linear status does not matter here: it is still
+   `In Progress`, by design (step 5). A blocker that is not in `stories_done`, or has no
+   `stack[]` entry, is **not** cleared by this clause. A blocker outside the snapshot, or in
+   the snapshot but not done in this run, keeps today's behavior (clause 3 re-pick, or the
+   halt below). A `flagged` entry still counts: `flagged` continues stacking.
 
 Otherwise **halt and notify**. Never proceed past a blocker with `Todo` or `In Progress`
 children. An **unsatisfied** blocker **outside** the snapshot always halts — clause 3 never
 applies to it: clause 3 only ever re-picks, it can never itself clear a blocker, so a blocker
 genuinely outside the snapshot can only ever reach this halt.
 
+> Clause 4 exists because step 5 leaves every story `In Progress` at PR open and never moves it
+> further, so in a stack where each story is `blockedBy` the one below, story 2's blocker is
+> done in this run, its PR is open, and its status can never reach `Done` or `Rolled Out`
+> overnight. Clauses 1-3 alone halted at story 2 — the gate would end every dependent stack
+> after its first PR. The branch already carries the blocker's work, and the PR is stacked on
+> it, so the dependency is satisfied in the only way this run can satisfy it.
+>
 > Clause 2 exists because a real run hit a blocker sitting in `Unplanned` whose seven
 > children were all `Done` — a tracking issue, not live work. A literal gate ends the night
 > on bookkeeping; ignoring blockers ships on a real gap. This is the judgment nobody is
