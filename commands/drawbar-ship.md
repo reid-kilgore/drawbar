@@ -389,9 +389,12 @@ genuinely outside the snapshot can only ever reach this halt.
   of no-op'ing forever. (The repo probe used there is a crash-recovery tool only, with a
   blind window between dispatch and first commit — it read "indistinguishable from never
   started" one minute after a live dispatch, so it must never gate a fresh in-window check.)
-- If `in_flight` is `null`, proceed to dispatch below.
+- If `in_flight` is `null`, proceed to dispatch below. So is an `in_flight` whose story is
+  already in `stories_done` and has a `stack` entry: that story reached Advance, its claim is
+  spent (a missed clear, or a state file from an older runbook), so there is no lead to wait
+  for — treat it as `null` and skip the liveness test.
 
-**Liveness test.** Run this whenever `in_flight` is non-null, before consulting its age. A
+**Liveness test.** Run this whenever `in_flight` is non-null and not spent (see above), before consulting its age. A
 process check is deliberately not part of this test: `lsof +D "$PROJECT_DIR"` also lists the
 ship session's own Claude process, its shell, and `lsof` itself, all of which have that
 directory as an ancestor of their cwd — so a process-based check reads "alive" unconditionally
@@ -414,7 +417,7 @@ apart, which is exactly why *Crash recovery* below stops the dispatch before tre
 # THIS project's own encoded-cwd directory — never a scan across every project's transcripts.
 STORY="${IN_FLIGHT_STORY}"   # in_flight.story, read from the state file
 ENCODED_CWD=$(printf '%s' "$PROJECT_DIR" | sed 's/[\/.]/-/g')
-TRANSCRIPT=$(ls -t ~/.claude/projects/"$ENCODED_CWD"/*/subagents/agent-adrawbar-story-lead-"$STORY"-*.jsonl 2>/dev/null | head -1)
+TRANSCRIPT=$(command ls -t ~/.claude/projects/"$ENCODED_CWD"/*/subagents/agent-adrawbar-story-lead-"$STORY"-*.jsonl 2>/dev/null | head -1)
 
 if [ -z "$TRANSCRIPT" ]; then
   echo "LIVENESS: transcript for drawbar-story-lead-$STORY not found under $ENCODED_CWD — cannot establish liveness, falling back to heartbeat age."
@@ -423,7 +426,7 @@ else
   # (implementer, reviewers) in this story — the newest file there, not the lead's file alone,
   # is the activity signal.
   SUBAGENTS_DIR=$(dirname "$TRANSCRIPT")
-  NEWEST=$(ls -t "$SUBAGENTS_DIR"/*.jsonl 2>/dev/null | head -1)
+  NEWEST=$(command ls -t "$SUBAGENTS_DIR"/*.jsonl 2>/dev/null | head -1)
   MTIME=$(stat -f %m "$NEWEST" 2>/dev/null || stat -c %Y "$NEWEST" 2>/dev/null)
   MTIME_AGE_S=$(( $(date +%s) - MTIME ))
 
@@ -1142,9 +1145,15 @@ or delay the story for a missing ledger.
 
 ## 7. Advance
 
-Append the story to `stories_done`. `in_flight` is **not** cleared here — §5 (post the
-summary comment) does not clear it either; it is cleared only by *Parking a story* and
-*Crash recovery* below. `PushNotification`
+Append the story to `stories_done` **and set `in_flight` to `null` in that same state write**
+(one `jq` edit, then the `$STATE.tmp` + `mv` rename used for the `stack` entry above — never
+two writes, so no crash can leave the story done with its claim still held). Without the
+clear, the next story cannot dispatch until the liveness test reads the finished lead as dead
+or 2x the heartbeat passes. The clear is safe here because §5 (post the summary comment)
+and the knowledge sync already ran: a crash before this write still leaves `in_flight` set and routes to *Crash
+recovery*, which resumes at the summary comment. Step 2's verdict also treats an `in_flight` whose story is in
+`stories_done` and has a `stack` entry as spent, so a missed clear or an older state file
+cannot stall the run. `PushNotification`
 one line: story id, PR link, sub-issues filed. `ScheduleWakeup`
 for the next story (under `/loop`), or report and finish.
 

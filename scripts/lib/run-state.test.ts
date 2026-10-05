@@ -514,6 +514,62 @@ describe("in_flight — the authoritative duplicate-dispatch guard, with a stale
     expect(verdict).toEqual({ action: "no_op", reason: "in_flight_fresh" });
   });
 
+  // A finished story's claim is spent: step 7 clears it, and the verdict must not depend on that
+  // write having happened (a missed clear, or a state file from an older runbook).
+  describe("a finished story's in_flight is spent", () => {
+    const dispatchedAt = "2026-01-01T00:00:00.000Z";
+    const freshNow = Date.parse(dispatchedAt) + 60_000;
+    const entry = { story: "story-b", branch: "b", pr: 2, base: "a", flagged: false };
+    const claim = { story: "story-b", agent_dispatched_at: dispatchedAt };
+
+    test("done and stacked gives dispatch even though the claim is fresh", () => {
+      const verdict = dispatchVerdict({ in_flight: claim, stories_done: ["story-a", "story-b"], stack: [entry] }, freshNow, HEARTBEAT_SECONDS);
+      expect(verdict).toEqual({ action: "dispatch" });
+    });
+
+    test("done and stacked gives dispatch even when the timestamp is unreadable", () => {
+      const verdict = dispatchVerdict(
+        { in_flight: { story: "story-b", agent_dispatched_at: "not-a-date" }, stories_done: ["story-b"], stack: [entry] },
+        freshNow,
+        HEARTBEAT_SECONDS,
+      );
+      expect(verdict).toEqual({ action: "dispatch" });
+    });
+
+    test("a fresh, unfinished claim still no-ops", () => {
+      const verdict = dispatchVerdict({ in_flight: claim, stories_done: ["story-a"], stack: [] }, freshNow, HEARTBEAT_SECONDS);
+      expect(verdict).toEqual({ action: "no_op", reason: "in_flight_fresh" });
+    });
+
+    test("done but not stacked is not provably finished and keeps the normal path", () => {
+      const verdict = dispatchVerdict({ in_flight: claim, stories_done: ["story-b"], stack: [] }, freshNow, HEARTBEAT_SECONDS);
+      expect(verdict).toEqual({ action: "no_op", reason: "in_flight_fresh" });
+    });
+
+    test("stacked but not done keeps the normal path", () => {
+      const verdict = dispatchVerdict({ in_flight: claim, stories_done: [], stack: [entry] }, freshNow, HEARTBEAT_SECONDS);
+      expect(verdict).toEqual({ action: "no_op", reason: "in_flight_fresh" });
+    });
+
+    test("a stale unfinished claim still goes to crash recovery", () => {
+      const now = Date.parse(dispatchedAt) + 2 * HEARTBEAT_SECONDS * 1000 + 1000;
+      const verdict = dispatchVerdict({ in_flight: claim, stories_done: ["story-a"], stack: [] }, now, HEARTBEAT_SECONDS);
+      expect(verdict).toEqual({ action: "crash_recovery", reason: "in_flight_stale" });
+    });
+
+    test("maybeDispatch dispatches the next story over a spent claim and re-arms in_flight", () => {
+      const calls: string[] = [];
+      const state: RunState = { ...BASE_STATE, stories_done: ["story-b"], stack: [entry], in_flight: claim };
+      const result = maybeDispatch({
+        state, story: "story-c", now: freshNow, heartbeatSeconds: HEARTBEAT_SECONDS,
+        dispatch: (s) => calls.push(s), persist: () => {},
+      });
+      expect(result.verdict).toEqual({ action: "dispatch" });
+      expect(calls).toEqual(["story-c"]);
+      expect(result.nextState.in_flight?.story).toBe("story-c");
+    });
+  });
+
   test("boundary: one second past 2x heartbeat IS stale", () => {
     const dispatchedAt = "2026-01-01T00:00:00.000Z";
     const now = Date.parse(dispatchedAt) + 2 * HEARTBEAT_SECONDS * 1000 + 1000;
