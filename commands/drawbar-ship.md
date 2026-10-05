@@ -945,10 +945,11 @@ git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
 # opens or updates the PR — with a title and description Graphite derives from the branch's
 # commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit`
 # immediately below overwrites both with those same two files, the same source `gh pr create`
-# reads from in the other arm. Both arms default to a non-draft PR: `gt submit` defaults
-# `--draft` to false exactly as an unflagged `gh pr create` does, so no `--draft` flag is needed
-# on either side to keep them matched.
-( cd "$PROJECT_DIR" && gt submit --no-edit ) \
+# reads from in the other arm. Both arms must open a non-draft PR, and this one only does with
+# `--publish`: in a non-interactive shell (an agent's) `gt submit` prints "Running in
+# non-interactive mode" and creates new PRs in draft mode, where an unflagged `gh pr create`
+# opens a ready PR. `--publish` overrides that default so this arm matches the other.
+( cd "$PROJECT_DIR" && gt submit --no-edit --publish ) \
   || { echo "NO_PR: gt submit failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
 gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \
   || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
