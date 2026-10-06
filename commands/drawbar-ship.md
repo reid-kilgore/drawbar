@@ -1409,6 +1409,7 @@ then `ScheduleWakeup({stop: true})`.
 - Sequential. One story per invocation. Never parallel.
 - Halt on failure; never skip a story.
 - **Run each fence from this file every time; never copy a fence into a script and reuse it — a copy freezes the fence and misses later fixes.** On 2026-10-06 the ffl ship session copied step 4's fence into its own `open-pr.sh` and kept running that copy after the fence changed, so two stories hit a race the file had already fixed, and each needed a hand repair of the run state.
+- **After any compaction, and before the next story after a drawbar update, re-invoke /drawbar:drawbar-ship.** The command text is injected once per invocation, so a session that keeps going on the old text runs old fences; on 2026-10-06 a compaction re-injected stale text from before a fix had landed.
 - `--base` comes from `scripts/lib/stack.ts`'s `resolveBase`, invoked as `stack.ts resolve-base`:
   the configured `baseBranch` for the first story of a run, the previous story's recorded branch
   for every story after that (Locked A). Never re-derive it in bash, never read it out of the

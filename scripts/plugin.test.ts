@@ -646,6 +646,12 @@ describe("Preflight's Linear-facts stdin shape matches ship-config.ts's isLinear
     expect(hard).toContain("2026-10-06");
   });
 
+  test("Hard rules require re-invoking the command after compaction or a drawbar update", () => {
+    const doc = readNonEmpty(join(root, "commands/drawbar-ship.md"));
+    const hard = doc.slice(doc.indexOf("## Hard rules"));
+    expect(hard).toContain("After any compaction, and before the next story after a drawbar update, re-invoke /drawbar:drawbar-ship.");
+  });
+
   test("the list_issue_statuses connectivity check names a real consumer, not the deleted status-transition rationale", () => {
     const doc = readNonEmpty(join(root, "commands/drawbar-ship.md"));
     // This command never performs a status transition — that claim is false and must be gone.
