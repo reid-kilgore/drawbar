@@ -70,28 +70,6 @@ arrived any other way — written by hand, imported, or edited since — has not
 This is where the cost belongs. A story that fails here costs a rewrite. The same story failing in
 review costs an implementation, a review, a fix pass, and a second review.
 
-Record what each reviewer found and what happened to it. A rule can only be judged by counting:
-
-```bash
-command -v tq-ledger >/dev/null 2>&1 && tq-ledger record finding --story <id> --rule TQ4 --reviewer ticket-simulator --outcome accepted
-```
-
-If `tq-ledger` is not installed, skip it — never fail or delay the story for a missing ledger.
-
-`--outcome` is `accepted`, `rebutted`, or `waived`. Record a rebuttal as readily as an acceptance — a rule
-whose findings are usually rebutted is a bad rule, and that only becomes visible if the rebuttals are
-counted too.
-
-Be honest about which of the three it was, because you are the ticket's author and the incentive runs one
-way. `accepted` means you changed the ticket. `rebutted` means you wrote a rebuttal into the ticket saying
-why the finding does not hold and left the ticket as it was — the operator decides from there, per the
-`adversarial-review` doctrine. `waived` means you neither fixed nor argued, and shipped anyway; that is a
-legitimate outcome and it is the one most likely to be quietly logged as `accepted`.
-
-Across the ledger's first thirty-two findings, none was recorded as rebutted. Either every finding really
-was right, or the distinction above is being collapsed. If you find yourself reaching for `accepted` because
-it is the shortest word, that is the failure.
-
 ## 4. Delegate implementation to a Sonnet agent
 
 You are the lead (Opus): you orchestrate and verify, you do **not** type the implementation. Move the story to `In Progress` (`save_issue`), then dispatch the **`story-implementer`** agent (it runs on Sonnet) to build the story test-first:
@@ -245,20 +223,6 @@ echo '{"key":"<kebab-key>","type":"<learned|decision|pattern|fact|investigation|
 
 For a mistake to guard against in future, use type `learned` with content beginning `MUST-CHECK:`.
 
-**Also record the code/security review's findings here, at the point of use.** §3.5 already records
-what the ticket-quality reviewers found; this is the same counting discipline applied to `code-reviewer`
-and `security-reviewer`, whose findings are never recorded anywhere else:
-
-```bash
-command -v tq-ledger >/dev/null 2>&1 && tq-ledger record finding --story <id> --rule TQ<n> --reviewer code-reviewer --outcome accepted --note "<one line>"
-```
-
-Use the reviewer that actually raised it, and the outcome that actually happened — `accepted`,
-`rebutted`, or `waived`, same as §3.5. Ticket-shaped escapes (a Locked claim that was never true, an
-unnamed surface, a false premise in the brief) are step 8.5's job, not this one — do not record the
-same defect twice under two names. If `tq-ledger` is not installed, skip this — never fail or delay
-the story for a missing ledger.
-
 ## 8. Close out — PR, leave In Progress
 
 1. Commit referencing the story id (e.g. `feat: … (ABC-123)`), on a feature branch whose name includes the id so Linear auto-links the PR.
@@ -269,7 +233,7 @@ the story for a missing ledger.
 
 If the Linear MCP is unavailable, do the implementation, KB capture, commit and PR locally; skip the Linear comment/status updates and tell the user.
 
-## 8.5 Record the gate escapes
+## 8.5 Name the gate escapes
 
 Before you report, answer one question: what did the implementer need that neither the story nor either
 ticket reviewer surfaced?
@@ -278,17 +242,10 @@ Those are gate escapes, and they are the only thing that teaches the standard. E
 caught is the gate working. Everything the story already carried is the story working. What leaked through
 both is the finding.
 
-```bash
-command -v tq-ledger >/dev/null 2>&1 && tq-ledger record escape --story <id> --rule TQ6 --note "one sentence, plain English"
-```
+Put each one in the report below as one plain-English sentence, and name the ticket-quality rule that
+should have caught it. When no rule covers it, say so and say what rule would have.
 
-If `tq-ledger` is not installed, skip it — never fail or delay the story for a missing ledger.
-
-Use the rule that should have caught it. When no rule covers it, that is the more interesting result: record
-it against `TQ0` and say in the note what rule would have. A rule that does not exist yet is invisible
-otherwise.
-
-Record nothing when nothing escaped. An empty result here is a real result and it is the one the standard is
+Name nothing when nothing escaped. An empty result here is a real result and it is the one the standard is
 trying to produce.
 
 ## 9. Report

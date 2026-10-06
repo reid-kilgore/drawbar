@@ -8814,3 +8814,14 @@ describe("fenced shell is zsh-safe", () => {
     expect(bad, `brace these as \${NAME}: so zsh does not read :r/:h/:t as a modifier\n${bad.join("\n")}`).toEqual([]);
   });
 });
+
+describe("retired ticket-quality ledger", () => {
+  test("no command file tells a session to use tq-ledger", () => {
+    const dir = join(root, "commands");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      expect(readNonEmpty(join(dir, f))).not.toContain("tq-ledger");
+    }
+  });
+});
