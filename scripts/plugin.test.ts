@@ -2176,7 +2176,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
       "CONFIG", "CONFIG_REAL", "RESOLVED", "ENV_DIR", "PROJECT_DIR", "REPO", "BASE_BRANCH", "STATE",
       "CHAIN_JSON", "CHAIN_OK", "CHAIN_REASON",
       "BASE_JSON", "BASE", "BASE_REASON",
-      "PR", "PR_BODY_CHECK", "ENTRY", "NEXT_STATE",
+      "PR", "PR_BODY_CHECK", "PR_BODY_ATTEMPTS", "PR_BODY_SETTLE", "PR_BODY_SETTLED_CHECK", "ENTRY", "NEXT_STATE",
       "VERIFY_JSON", "VERIFY_OK", "VERIFY_REASON",
     ];
     for (const name of DERIVED) {
@@ -2248,6 +2248,51 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     expect(editLine).toBe(
       'gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \\',
     );
+  });
+
+  // The stacked arm's title/body write must survive Graphite rewriting the description after
+  // `gt submit` returns (PES run, PR #6995: the read-back failed and the run parked). The edit
+  // and the read-back are one bounded retry loop; only the last attempt's failure refuses.
+  test("the stacked arm re-applies and re-verifies the PR body in a bounded retry loop, and its refusal carries the attempt count", () => {
+    const c = code();
+    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
+    const forkElse = c.indexOf("\nelse\n", forkStart);
+    const forkEnd = c.indexOf("\nfi\n", forkElse);
+    const elseArm = c.slice(forkElse, forkEnd);
+    expect(elseArm).toContain("PR_BODY_ATTEMPTS=4\n");
+    const whileAt = elseArm.indexOf('while [ "$PR_BODY_TRY" -le "$PR_BODY_ATTEMPTS" ]; do');
+    const doneAt = elseArm.indexOf("\ndone\n", whileAt);
+    expect(whileAt, "the retry loop is missing").toBeGreaterThan(-1);
+    expect(doneAt).toBeGreaterThan(whileAt);
+    const loop = elseArm.slice(whileAt, doneAt);
+    // The re-apply and the read-back both sit INSIDE the loop, so every attempt re-writes the body.
+    expect(loop).toContain('gh pr edit "$BRANCH"');
+    expect(loop).toContain('gh pr view "$BRANCH" --repo "$REPO" --json body -q .body');
+    expect(loop).toContain('"${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK"');
+    // Acceptance needs BOTH reads: a match, a settle sleep, a second read that also matches, in
+    // that order, all before PR_BODY_OK=true, so an overwrite landing after the first read fails the attempt.
+    expect(elseArm).toContain("PR_BODY_SETTLE=5\n");
+    const iFirst = loop.indexOf('"${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK"');
+    const iSleep = loop.indexOf('sleep "$PR_BODY_SETTLE"');
+    const iSecondRead = loop.indexOf("PR_BODY_SETTLED_CHECK=$(gh pr view");
+    const iSecondCmp = loop.indexOf('"${PR_BODY_SETTLED_CHECK#reviewed at }" != "$PR_BODY_SETTLED_CHECK"');
+    const iOk = loop.indexOf("&& PR_BODY_OK=true");
+    expect(iFirst).toBeGreaterThan(-1);
+    expect(iSleep).toBeGreaterThan(iFirst);
+    expect(iSecondRead).toBeGreaterThan(iSleep);
+    expect(iSecondCmp).toBeGreaterThan(iSecondRead);
+    expect(iOk).toBeGreaterThan(iSecondCmp);
+    // Bounded: the counter increments, backoff doubles, and no wait follows the last attempt.
+    expect(loop).toContain("PR_BODY_TRY=$((PR_BODY_TRY + 1))");
+    expect(loop).toContain("PR_BODY_WAIT=$((PR_BODY_WAIT * 2))");
+    expect(loop).toContain('if [ "$PR_BODY_TRY" -lt "$PR_BODY_ATTEMPTS" ]; then sleep "$PR_BODY_WAIT"');
+    expect(loop).not.toContain("exit 1");
+    // Nothing outside the loop re-reads the body: one gh pr edit in the arm, inside the loop.
+    expect(elseArm.match(/gh pr edit /g)!.length).toBe(1);
+    // The refusal comes only after the loop and names the attempt count.
+    const refusal = elseArm.slice(doneAt).match(/echo "PR_UNRECORDED: [^"]*"/);
+    expect(refusal, "no refusal after the loop").not.toBeNull();
+    expect(refusal![0]).toContain("$PR_BODY_ATTEMPTS attempts");
   });
 
   test("CRITICAL 3: the not-empty / not-\"null\" assert loop covers the WHOLE derived set, per variable", () => {
@@ -3302,8 +3347,9 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
       expect(site, `a NO_PR: site claims a PR is open — that is Outcome C: ${site}`).not.toContain("PR is open");
     }
     // 13 since the round-trip assert-chain got its own trunk fetch (a failed fetch there is Outcome C: the PR is already open).
+    // 11 since the stacked arm's edit, read-back and first-line check became one bounded retry loop with a single refusal.
     const unrecorded = [...c.matchAll(/echo "PR_UNRECORDED: [^"]*"/g)].map((m) => m[0]);
-    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(13);
+    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(11);
     for (const site of unrecorded) {
       expect(site, `an Outcome C site does not say the PR is open: ${site}`).toContain(
         "— the PR is open; park the story with that reason (Outcome C) and repair the run state by hand.",
@@ -7751,8 +7797,8 @@ const SH4_FENCE_COMMENTS: readonly string[] = [
     "Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and `--body-file` reads it inside `gh`, so no report text is ever part of this command line. A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`: `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever part of a command line either way.",
     "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch; `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain, so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.)",
     "`gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`, `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description` and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still opens or updates the PR — with a title and description Graphite derives from the branch's commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit` immediately below overwrites both with those same two files, the same source `gh pr create` reads from in the other arm. Both arms must open a non-draft PR, and this one only does with `--publish`: in a non-interactive shell (an agent's) `gt submit` prints \"Running in non-interactive mode\" and creates new PRs in draft mode, where an unflagged `gh pr create` opens a ready PR. `--publish` overrides that default so this arm matches the other.",
+    "Graphite can write its own commit-message description into the PR AFTER `gt submit` returns (observed twice: it overwrote the body this fence had just set), so a single `gh pr edit` and one read-back is a race. `gh pr edit` returning success is not proof its write landed with this exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all: long enough for an asynchronous Graphite sync to finish, short enough not to stall an unattended run). An attempt succeeds only when the body read back starts with the same first line `$PR_BODY_FILE` was built with AND still does after a 5 second settle and a second read: a match straight after the edit proves nothing if Graphite's write lands a moment later, and running on with Graphite's description is worse than parking. 5 seconds is a few times the latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls. Only after the last attempt does the fence refuse.",
     "`gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly as strictly as a `gh`-opened one.",
-    "`gh pr edit` returning success is not proof its write landed with this exact content — read the body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the content this arm wrote can never silently diverge from what the file on disk actually held.",
     "--- pr number shape gate --------------------------------------------------------------------",
     "Never `basename \"$PR_URL\"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.",
     "--- end pr number shape gate -----------------------------------------------------------------",

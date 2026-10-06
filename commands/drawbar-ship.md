@@ -951,23 +951,45 @@ git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
 # opens a ready PR. `--publish` overrides that default so this arm matches the other.
 ( cd "$PROJECT_DIR" && gt submit --no-edit --publish ) \
   || { echo "NO_PR: gt submit failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+# Graphite can write its own commit-message description into the PR AFTER `gt submit` returns
+# (observed twice: it overwrote the body this fence had just set), so a single `gh pr edit` and
+# one read-back is a race. `gh pr edit` returning success is not proof its write landed with this
+# exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as
+# one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all:
+# long enough for an asynchronous Graphite sync to finish, short enough not to stall an
+# unattended run). An attempt succeeds only when the body read back starts with the same first
+# line `$PR_BODY_FILE` was built with AND still does after a 5 second settle and a second read: a
+# match straight after the edit proves nothing if Graphite's write lands a moment later, and
+# running on with Graphite's description is worse than parking. 5 seconds is a few times the
+# latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only
+# after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case
+# is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls.
+# Only after the last attempt does the fence refuse.
+PR_BODY_ATTEMPTS=4
+PR_BODY_SETTLE=5
+PR_BODY_TRY=1
+PR_BODY_WAIT=2
+PR_BODY_OK=false
+while [ "$PR_BODY_TRY" -le "$PR_BODY_ATTEMPTS" ]; do
 gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \
-  || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+  && PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
+  && [ "${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK" ] \
+  && sleep "$PR_BODY_SETTLE" \
+  && PR_BODY_SETTLED_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
+  && [ "${PR_BODY_SETTLED_CHECK#reviewed at }" != "$PR_BODY_SETTLED_CHECK" ] \
+  && PR_BODY_OK=true
+[ "$PR_BODY_OK" = "true" ] && break
+if [ "$PR_BODY_TRY" -lt "$PR_BODY_ATTEMPTS" ]; then sleep "$PR_BODY_WAIT"; PR_BODY_WAIT=$((PR_BODY_WAIT * 2)); fi
+PR_BODY_TRY=$((PR_BODY_TRY + 1))
+done
+[ "$PR_BODY_OK" = "true" ] \
+  || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set and confirmed after $PR_BODY_ATTEMPTS attempts — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 # `gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same
 # way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the
 # PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly
 # as strictly as a `gh`-opened one.
 PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \
   || { echo "PR_UNRECORDED: gt submit opened the PR but it could not be read back — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
-# `gh pr edit` returning success is not proof its write landed with this exact content — read the
-# body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the
-# content this arm wrote can never silently diverge from what the file on disk actually held.
-PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
-  || { echo "PR_UNRECORDED: the PR body could not be read back to confirm it — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
-case "$PR_BODY_CHECK" in
-  "reviewed at "*) ;;
-  *) echo "PR_UNRECORDED: the PR body does not start with the expected first line after gh pr edit — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1;;
-esac
 fi
 
 # --- pr number shape gate --------------------------------------------------------------------
