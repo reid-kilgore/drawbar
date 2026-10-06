@@ -515,7 +515,7 @@ STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
 # `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it
 # here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a
 # story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.
-git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
   || { echo "NO_DISPATCH: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 
 # Echo `.reason` and NOTHING else — `.detail` carries absolute paths and the real repo slug,
@@ -901,7 +901,7 @@ STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
 # `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it
 # here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a
 # story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.
-git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
   || { echo "NO_PR: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 CHAIN_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" assert-chain --state "$STATE" --project-dir "$PROJECT_DIR")
 CHAIN_OK=$(printf '%s' "${CHAIN_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then "true" else "false" end' 2>/dev/null)
@@ -1015,7 +1015,7 @@ printf '%s\n' "$NEXT_STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE" || { echo
 # Round-trip what was just written through `parseRunState` — `assert-chain` parses the state
 # with it and re-verifies the chain including the entry appended above. A wrong JSON type is
 # caught HERE, in the step that wrote it, instead of bricking every later read.
-git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
   || { echo "PR_UNRECORDED: could not fetch origin/$BASE_BRANCH for the round-trip check — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 VERIFY_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" assert-chain --state "$STATE" --project-dir "$PROJECT_DIR")
 VERIFY_OK=$(printf '%s' "${VERIFY_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then "true" else "false" end' 2>/dev/null)
@@ -1295,7 +1295,7 @@ worse than any delay.
    STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
 
    # Fetch the trunk ref `assert-chain` judges stack[0] against (it never fetches). A failed fetch refuses.
-   git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" \
+   git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
      || { echo "PARK: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 
    # Chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh

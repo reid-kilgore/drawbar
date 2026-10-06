@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { readFileSync, mkdtempSync, writeFileSync, existsSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { readFileSync, mkdtempSync, readdirSync, writeFileSync, existsSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8754,4 +8754,49 @@ describe("git stash is prohibited for git-running agents (drawbar defect 1)", ()
       expect(txt.toLowerCase()).toContain("wip");
     });
   }
+});
+
+// Sessions run fenced shell through the Bash tool, whose shell on the operator's laptops is
+// zsh. Inside double quotes zsh reads `$NAME:r` (and :h :t :e :a :l :u :q :s ...) as a history
+// style modifier, so "+refs/heads/$B:refs/remotes/origin/$B" becomes "+refs/heads/mainefs/...".
+// Bracing the name (`${B}:`) is safe in both bash and zsh.
+describe("fenced shell is zsh-safe", () => {
+  function shellFenceLines(path: string): { line: number; text: string }[] {
+    const out: { line: number; text: string }[] = [];
+    let inFence = false;
+    let shell = false;
+    readNonEmpty(path).split("\n").forEach((text, i) => {
+      const m = text.match(/^\s*```(\S*)/);
+      if (m) {
+        if (inFence) { inFence = false; shell = false; }
+        else { inFence = true; shell = m[1] === "" || /^(bash|sh|zsh|shell)$/.test(m[1]!); }
+        return;
+      }
+      if (inFence && shell) out.push({ line: i + 1, text });
+    });
+    return out;
+  }
+
+  const files: string[] = [];
+  for (const f of readdirSync(join(root, "commands"))) if (f.endsWith(".md")) files.push(join("commands", f));
+  for (const d of readdirSync(join(root, "skills"))) {
+    const p = join("skills", d, "SKILL.md");
+    if (existsSync(join(root, p))) files.push(p);
+  }
+
+  test("the scan covers the ship command and the skills", () => {
+    expect(files).toContain(join("commands", "drawbar-ship.md"));
+    expect(files.length).toBeGreaterThan(5);
+    expect(shellFenceLines(join(root, "commands/drawbar-ship.md")).length).toBeGreaterThan(0);
+  });
+
+  test("no unbraced $NAME is followed by a colon and a letter", () => {
+    const bad: string[] = [];
+    for (const f of files) {
+      for (const { line, text } of shellFenceLines(join(root, f))) {
+        if (/\$[A-Za-z_][A-Za-z0-9_]*:[A-Za-z]/.test(text)) bad.push(`${f}:${line}: ${text.trim()}`);
+      }
+    }
+    expect(bad, `brace these as \${NAME}: so zsh does not read :r/:h/:t as a modifier\n${bad.join("\n")}`).toEqual([]);
+  });
 });
