@@ -329,14 +329,17 @@ wrong, why it is out of scope, and the evidence. Your caller files them in Linea
 
 ## 6. Commit and push
 
-**A story that changes something a person sees carries screenshots (Reid, 2026-09-26: "all the prs that have visual components mUST have screenshots").** When the diff
+**A story that changes something a person sees carries screenshots (Reid, 2026-09-26: "all the prs that have visual components mUST have screenshots"), and the images never go on the story branch.** When the diff
 touches components, styles or copy under `frontend/`, `admin-ui/`, `mobile-web/` or `tablet/`, capture a before
-and an after image of each changed screen, from the repository's own dev harness or dev server, before this
-commit. Save them under a `screenshots` folder named for the story, as numbered files like
-`NN-<what-it-shows>.png`, so they are committed with the work, and list them in your report's `screenshots`. If
-those paths changed but nothing a person sees did (a refactor, a type), leave `screenshots` empty and put the
-reason in `no_visual_change`. Your caller links each image in the pull request body and refuses the story if a
-visual change has neither.
+and an after image of each changed screen, from the repository's own dev harness or dev server, into a scratch
+folder outside the work tree. Then put them on an evidence branch, which never lands in the base and never gets a pull
+request: in a separate worktree, cut `"$BRANCH-evidence"` from `$BASE`, commit the images there under a
+`screenshots` folder named for the story, as numbered files like `NN-<what-it-shows>.png`, and push that branch to the project's
+`origin` (the product repository, not the drawbar repository). Capture its head with `rev-parse HEAD` as the
+evidence sha. An image committed on the story branch would travel with the story into the base. List the evidence branch, the
+evidence sha and each image in your report's `screenshots`. If those paths changed but nothing a person sees did
+(a refactor, a type), report `screenshots` as null and put the reason in `no_visual_change`. Your caller links each
+image in the pull request body by the evidence sha and refuses the story if a visual change has neither.
 
 
 ```bash
@@ -375,7 +378,7 @@ story 1 every night.
   "out_of_scope": [{"title": "...", "detail": "file and symbol, what is wrong, why out of scope"}],
   "false_claims": [{"claim": "...", "contradicted_by": "file and symbol", "evidence": "what the code says"}],
   "lessons": [{"key": "kebab-key", "type": "learned", "content": "...", "tags": ["..."]}],
-  "screenshots": [{"path": "<screenshots-path>/NN-name.png", "shows": "before | after: what it shows"}],
+  "screenshots": {"evidence_branch": "<branch>-evidence", "evidence_sha": "<sha>", "images": [{"path": "<screenshots-path>/NN-name.png", "shows": "before | after: what it shows"}]} | null,
   "no_visual_change": null,
   "summary": "two or three sentences"
 }

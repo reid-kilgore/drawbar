@@ -678,11 +678,13 @@ location in structured form: a serializer that drops `detail` and emits the key 
 the location anyway, and a ban worded against one spelling is not a ban on the field.
 
 **A story that changed something a person sees carries its screenshots in the PR body (Reid, 2026-09-26: "all the prs that have visual components mUST have screenshots").**
-Build a `## Screenshots` section before `gh pr create` runs, linking each path in the story-lead's
-`screenshots` by its GitHub file URL at `head_sha`, with
-its `shows` text. When the report instead carries `no_visual_change`, the body says `No visual change:` and
-that reason. After the PR opens, run `pr-screenshot-check <pr> -R <repo>` (from the meta-agent repo, on PATH):
-exit 1 means a visual change went out without images, and the story is reported flagged, never ok.
+Build a `## Screenshots` section before `gh pr create` runs, linking each image in the story-lead's
+`screenshots.images` as a plain GitHub blob link (the `<path>` of the image) into the product repository, pinned to
+the report's `evidence_sha` on the evidence branch and not to `head_sha`, with its `shows` text. The images live
+only on that evidence branch, which never lands in the base and gets no PR; never copy them onto the story branch. When
+the report instead carries `no_visual_change`, the body says `No visual change:` and that reason. After the PR
+opens, run `pr-screenshot-check <pr> -R <repo>` (from the meta-agent repo, on PATH): exit 1 means a visual change
+went out without images, or the PR's own diff carries image files, and the story is reported flagged, never ok.
 
 **Every PR body opens with a review-provenance line, on a flagged story and a clean one alike**,
 built before `gh pr create` runs: `reviewed at <reviewed_sha> from <spec_source>; N commits since`,
