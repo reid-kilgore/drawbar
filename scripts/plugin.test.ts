@@ -7049,7 +7049,9 @@ const SH4_PROSE: readonly string[] = [
       "Build a `## Screenshots` section before `gh pr create` runs, linking each image in the " +
       "story-lead's `screenshots.images` as a plain GitHub " +
       "blob link (the `<path>` of the image) into the product repository, pinned to the report's " +
-      "`evidence_sha` on the evidence branch and not to `head_sha`, with its `shows` text. The " +
+      "`evidence_sha` on the evidence branch and not to `head_sha`, labelled with its `shows` text and " +
+      "\"(click to view)\". Open the section with one line saying the images open in GitHub and do not " +
+      "show inline: blob links into a private repository do not render as images in Graphite. The " +
       "images live only on that evidence branch, which never lands in the base and gets no PR; never copy " +
       "them onto the story branch. When the report instead carries `no_visual_change`, the body " +
       "says `No visual change:` and that reason. After the PR opens, run `pr-screenshot-check " +
