@@ -7392,6 +7392,10 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
         "`screenshots` as null and put the reason in `no_visual_change`. Your caller links each " +
         "image in the pull request body by the evidence sha and refuses the story if a visual " +
         "change has neither.",
+      "**Anything visibly wrong in a screenshot is a finding in your report's `findings`, with the " +
+        "image path, and you never change the capture to hide it.** A different hover, size, scroll " +
+        "or data that makes the defect disappear is hiding it: a story lead saw two tooltips overlap " +
+        "in its screenshot, worked around it for a clean image, and a later review found the defect.",
       "```bash git -C \"$PROJECT_DIR\" add -A git -C \"$PROJECT_DIR\" commit -m \"<type>: <summary> " +
         "(<STORY>)\" # hooks run — never --no-verify git -C \"$PROJECT_DIR\" push -u origin " +
         "\"$BRANCH\" ```",
