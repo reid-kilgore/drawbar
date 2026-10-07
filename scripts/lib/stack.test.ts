@@ -172,11 +172,18 @@ function makeGitRunner(
       // (`refs/tags/<x>` resolved ahead of `refs/heads/<x>`) answer the ancestry question
       // about a DIFFERENT object than the one just verified to exist — a `git tag` of the same
       // name would silently defeat the whole check.
-      expect(argv.length, `merge-base argv must be exactly 6 elements, got: ${argv.join(" ")}`).toBe(6);
-      expect(argv[4], "merge-base's base argument must be refs/heads/-qualified").toMatch(/^refs\/heads\//);
-      expect(argv[5], "merge-base's branch argument must be refs/heads/-qualified").toMatch(/^refs\/heads\//);
-      const base = argv[4]!.slice("refs/heads/".length);
-      const branch = argv[5]!.slice("refs/heads/".length);
+      //
+      // Two shapes, and the fake enforces which is which: an inner link (`--is-ancestor`, both
+      // refs/heads/) and the trunk link for stack[0] (plain `merge-base`, base is the
+      // remote-tracking ref refs/remotes/origin/<base>, branch is refs/heads/).
+      const isInnerLink = argv[3] === "--is-ancestor";
+      const basePrefix = isInnerLink ? "refs/heads/" : "refs/remotes/origin/";
+      const baseIdx = isInnerLink ? 4 : 3;
+      expect(argv.length, `merge-base argv length wrong, got: ${argv.join(" ")}`).toBe(isInnerLink ? 6 : 5);
+      expect(argv[baseIdx], `merge-base's base argument must be ${basePrefix}-qualified`).toStartWith(basePrefix);
+      expect(argv[baseIdx + 1], "merge-base's branch argument must be refs/heads/-qualified").toMatch(/^refs\/heads\//);
+      const base = argv[baseIdx]!.slice(basePrefix.length);
+      const branch = argv[baseIdx + 1]!.slice("refs/heads/".length);
       const code = opts.ancestorExit ? opts.ancestorExit(base, branch) : 0;
       return { code, stdout: "", stderr: code !== 0 && code !== 1 ? "fatal: Not a valid object name" : "" };
     }
@@ -187,12 +194,12 @@ function makeGitRunner(
       // `--` terminator must be present so a branch name can never be re-read as a pathspec.
       expect(argv.length, `rev-list argv must be exactly 6 elements, got: ${argv.join(" ")}`).toBe(6);
       expect(argv[3], "rev-list must ask for --count").toBe("--count");
-      expect(argv[4], "rev-list's range must be refs/heads/<base>..refs/heads/<branch>").toMatch(
-        /^refs\/heads\/[^.]\S*\.\.refs\/heads\/\S+$/,
+      expect(argv[4], "rev-list's range must be <qualified base>..refs/heads/<branch>").toMatch(
+        /^refs\/(heads|remotes\/origin)\/[^.]\S*\.\.refs\/heads\/\S+$/,
       );
       expect(argv[5], "rev-list must terminate its revisions with --").toBe("--");
       const [baseRef, branchRef] = argv[4]!.split("..");
-      const base = baseRef!.slice("refs/heads/".length);
+      const base = baseRef!.replace(/^refs\/(heads|remotes\/origin)\//, "");
       const branch = branchRef!.slice("refs/heads/".length);
       const res = opts.revListCount ? opts.revListCount(base, branch) : { code: 0, stdout: "1\n" };
       return { ...res, stderr: res.code === 0 ? "" : "fatal: ambiguous argument" };
@@ -317,7 +324,7 @@ describe("assertChainIntact — refuses when a recorded predecessor branch is mi
     // entry[0].base ("trunk") is deliberately a DIFFERENT ref from entry[0].branch
     // ("story-a-branch") — marking only the base missing proves the two checks are
     // independent, not that "any missing ref" collapses to one reason.
-    const { run } = makeGitRunner({ missingRefs: new Set([`refs/heads/${STORY_A_ENTRY.base}`]) });
+    const { run } = makeGitRunner({ missingRefs: new Set([`refs/remotes/origin/${STORY_A_ENTRY.base}`]) });
     const result = assertChainIntact({ stack: [STORY_A_ENTRY], resolved_config: VALID_RESOLVED_CONFIG }, PROJECT_DIR, run);
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -337,7 +344,7 @@ describe("assertChainIntact — refuses when a recorded predecessor branch is mi
   });
 
   test("a genuine git error from rev-parse on the BASE check (exit 128) is git_failed, distinct from base_missing", () => {
-    const { run } = makeGitRunner({ gitErrorRefs: new Set([`refs/heads/${STORY_A_ENTRY.base}`]) });
+    const { run } = makeGitRunner({ gitErrorRefs: new Set([`refs/remotes/origin/${STORY_A_ENTRY.base}`]) });
     const result = assertChainIntact({ stack: [STORY_A_ENTRY], resolved_config: VALID_RESOLVED_CONFIG }, PROJECT_DIR, run);
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -1329,5 +1336,131 @@ describe("main() — plan-cleanup wires the state's own base in, and keeps --pro
     expect(err).toContain("resolve-base");
     expect(err).toContain("assert-chain");
     expect(err).toContain("plan-cleanup");
+  });
+});
+
+// --- assertChainIntact against REAL git: the trunk link of stack[0] ---------------------------
+//
+// Several sessions share one checkout and any of them may fast-forward local `trunk`. stack[0] is
+// judged against `refs/remotes/origin/<base>` (exists, shares history, holds >= 1 commit beyond
+// it), so a moving trunk must not refuse an intact stack while a broken INNER link still does.
+// These run real git in temp repos: a fake runner cannot prove an exit code or a ref-resolution
+// order. Exit codes relied on, verified on git 2.53.0: `merge-base A B` exits 1 for two
+// unrelated histories and 128 for a bogus ref; `rev-parse --verify --quiet` exits 1 for a
+// missing ref.
+describe("assertChainIntact — stack[0] is judged against the remote-tracking trunk (real git)", () => {
+  const realGit: Runner = (argv) => {
+    const proc = Bun.spawnSync(["git", ...argv], { stdout: "pipe", stderr: "pipe" });
+    return { code: proc.exitCode ?? 1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  };
+  const tmpDirs: string[] = [];
+
+  function sh(cwd: string, ...argv: string[]): string {
+    const r = realGit(["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...argv]);
+    if (r.code !== 0) throw new Error(`git ${argv.join(" ")} failed (${r.code}): ${r.stderr}`);
+    return r.stdout.trim();
+  }
+
+  // origin (bare) + `work` (the checkout assertChainIntact is pointed at) with one trunk commit
+  // pushed, and `story-a-branch` holding one commit beyond trunk.
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), "drawbar-trunk-link-"));
+    tmpDirs.push(root);
+    const origin = join(root, "origin.git");
+    const work = join(root, "work");
+    const other = join(root, "other");
+    sh(root, "init", "-q", "--bare", "-b", "trunk", origin);
+    sh(root, "clone", "-q", origin, work);
+    sh(work, "checkout", "-q", "-b", "trunk");
+    sh(work, "commit", "-q", "--allow-empty", "-m", "t0");
+    sh(work, "push", "-q", "origin", "trunk");
+    sh(work, "checkout", "-q", "-b", STORY_A_ENTRY.branch);
+    sh(work, "commit", "-q", "--allow-empty", "-m", "a1");
+    sh(work, "checkout", "-q", "trunk");
+    const check = (stack: StackEntry[] = [STORY_A_ENTRY]) =>
+      assertChainIntact({ stack, resolved_config: VALID_RESOLVED_CONFIG }, work, realGit);
+    // Advance origin's trunk from a second clone, the way another session's merge would.
+    const advanceOrigin = () => {
+      sh(root, "clone", "-q", origin, other);
+      sh(other, "checkout", "-q", "trunk");
+      sh(other, "commit", "-q", "--allow-empty", "-m", "t1");
+      sh(other, "push", "-q", "origin", "trunk");
+    };
+    return { root, work, check, advanceOrigin };
+  }
+
+  test("baseline: a stack[0] branch one commit past the fetched trunk is ok", () => {
+    const { check } = fixture();
+    expect(check()).toEqual({ ok: true });
+  });
+
+  test("fast-forwarding local trunk AND origin/trunk past stack[0]'s fork point is still ok", () => {
+    const { work, check, advanceOrigin } = fixture();
+    advanceOrigin();
+    sh(work, "fetch", "-q", "origin", "+refs/heads/trunk:refs/remotes/origin/trunk");
+    sh(work, "merge", "-q", "--ff-only", "refs/remotes/origin/trunk"); // local trunk fast-forwards too
+    expect(sh(work, "rev-parse", "refs/heads/trunk")).toBe(sh(work, "rev-parse", "refs/remotes/origin/trunk"));
+    expect(check()).toEqual({ ok: true });
+  });
+
+  test("a stack[0] branch with history unrelated to the trunk refuses branch_moved (git exit 1, not git_failed)", () => {
+    const { work, check } = fixture();
+    sh(work, "checkout", "-q", "--orphan", "orphan-tmp");
+    sh(work, "commit", "-q", "--allow-empty", "-m", "unrelated");
+    sh(work, "branch", "-q", "-f", STORY_A_ENTRY.branch, "orphan-tmp");
+    sh(work, "checkout", "-q", "trunk");
+    // Premise: the merge-base really does exit 1 here, which is what separates it from git_failed.
+    expect(realGit(["-C", work, "merge-base", "refs/remotes/origin/trunk", `refs/heads/${STORY_A_ENTRY.branch}`]).code).toBe(1);
+    const result = check();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("branch_moved");
+  });
+
+  test("a stack[0] branch already merged into origin/trunk refuses branch_commitless", () => {
+    const { work, check } = fixture();
+    sh(work, "push", "-q", "origin", `${STORY_A_ENTRY.branch}:trunk`); // fast-forward origin's trunk onto the story
+    sh(work, "fetch", "-q", "origin", "+refs/heads/trunk:refs/remotes/origin/trunk");
+    const result = check();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("branch_commitless");
+  });
+
+  test("a missing refs/remotes/origin/<base> refuses base_missing, even though local trunk exists", () => {
+    const { work, check } = fixture();
+    sh(work, "update-ref", "-d", "refs/remotes/origin/trunk");
+    expect(realGit(["-C", work, "rev-parse", "--verify", "--quiet", "refs/heads/trunk"]).code).toBe(0);
+    const result = check();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("base_missing");
+  });
+
+  test("a tag named like the remote ref does not shadow refs/remotes/origin/<base>", () => {
+    const { work, check } = fixture();
+    // Bare `origin/trunk` resolves refs/tags/origin/trunk first. Pointing the tag at the story tip
+    // would make a bare-name range empty (commitless) if the code ever used the unqualified name.
+    sh(work, "tag", "origin/trunk", `refs/heads/${STORY_A_ENTRY.branch}`);
+    expect(check()).toEqual({ ok: true });
+  });
+
+  test("an INNER link is unchanged: rewriting story A so story B no longer sits on it still refuses branch_moved", () => {
+    const { work, check } = fixture();
+    sh(work, "checkout", "-q", "-b", STORY_B_ENTRY.branch, STORY_A_ENTRY.branch);
+    sh(work, "commit", "-q", "--allow-empty", "-m", "b1");
+    expect(check([STORY_A_ENTRY, STORY_B_ENTRY])).toEqual({ ok: true });
+    sh(work, "checkout", "-q", STORY_A_ENTRY.branch);
+    sh(work, "commit", "-q", "--amend", "--allow-empty", "-m", "a1 rewritten");
+    const result = check([STORY_A_ENTRY, STORY_B_ENTRY]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("branch_moved");
+    expect(result.detail).toContain("stack[1]");
+  });
+
+  test("cleanup", () => {
+    for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
+    expect(true).toBe(true);
   });
 });

@@ -314,8 +314,8 @@ deliberately **not** added to it.
 Next id in the snapshot not in `stories_done`, whose Linear status is still `Todo`.
 Snapshot exhausted → go to *Finishing the run*.
 
-**Blocker rule.** A `blockedBy` relation is resolved by exactly one of the following three
-clauses — but they do not all mean the same thing. Clauses 1-2 **clear** the blocker: the
+**Blocker rule.** A `blockedBy` relation is resolved by exactly one of the following four
+clauses — but they do not all mean the same thing. Clauses 1, 2 and 4 **clear** the blocker: the
 gate is satisfied, proceed with the current story. Clause 3 is different in kind, not just in
 number: it means your **pick** was wrong, not that the blocker cleared — its outcome is
 **re-pick, never proceed**.
@@ -336,12 +336,31 @@ number: it means your **pick** was wrong, not that the blocker cleared — its o
    the pick unchanged. Comparing against the immediately-previous pick alone misses a
    two-cycle: a mid-run `A blockedBy B` plus `B blockedBy A` yields X→Y→X→Y, where every
    re-sort *does* change the pick and a previous-pick-only terminator never fires.
+4. **(stacked on the blocker)** the blocker is in `stories_done` of **this run**, **and** the
+   run state's `stack[]` holds an entry for it (its PR was opened in this run) — **any** entry,
+   not only the last. The stack is linear and the current story's base is the last entry's
+   branch, so a blocker anywhere in `stack[]` is already beneath the current story. This
+   relies on the chain being intact: step 2's `assert-chain` gate proves, before every
+   dispatch, that each entry is an ancestor of the next, and a refusal there parks the story
+   before this clause matters. Membership in `stories_done` is **exact, case-sensitive
+   equality**, as in clause 3. The blocker's Linear status does not matter here: it is still
+   `In Progress`, by design (step 5). A blocker that is not in `stories_done`, or has no
+   `stack[]` entry, is **not** cleared by this clause. A blocker outside the snapshot, or in
+   the snapshot but not done in this run, keeps today's behavior (clause 3 re-pick, or the
+   halt below). A `flagged` entry still counts: `flagged` continues stacking.
 
 Otherwise **halt and notify**. Never proceed past a blocker with `Todo` or `In Progress`
 children. An **unsatisfied** blocker **outside** the snapshot always halts — clause 3 never
 applies to it: clause 3 only ever re-picks, it can never itself clear a blocker, so a blocker
 genuinely outside the snapshot can only ever reach this halt.
 
+> Clause 4 exists because step 5 leaves every story `In Progress` at PR open and never moves it
+> further, so in a stack where each story is `blockedBy` the one below, story 2's blocker is
+> done in this run, its PR is open, and its status can never reach `Done` or `Rolled Out`
+> overnight. Clauses 1-3 alone halted at story 2 — the gate would end every dependent stack
+> after its first PR. The branch already carries the blocker's work, and the PR is stacked on
+> it, so the dependency is satisfied in the only way this run can satisfy it.
+>
 > Clause 2 exists because a real run hit a blocker sitting in `Unplanned` whose seven
 > children were all `Done` — a tracking issue, not live work. A literal gate ends the night
 > on bookkeeping; ignoring blockers ships on a real gap. This is the judgment nobody is
@@ -370,9 +389,12 @@ genuinely outside the snapshot can only ever reach this halt.
   of no-op'ing forever. (The repo probe used there is a crash-recovery tool only, with a
   blind window between dispatch and first commit — it read "indistinguishable from never
   started" one minute after a live dispatch, so it must never gate a fresh in-window check.)
-- If `in_flight` is `null`, proceed to dispatch below.
+- If `in_flight` is `null`, proceed to dispatch below. So is an `in_flight` whose story is
+  already in `stories_done` and has a `stack` entry: that story reached Advance, its claim is
+  spent (a missed clear, or a state file from an older runbook), so there is no lead to wait
+  for — treat it as `null` and skip the liveness test.
 
-**Liveness test.** Run this whenever `in_flight` is non-null, before consulting its age. A
+**Liveness test.** Run this whenever `in_flight` is non-null and not spent (see above), before consulting its age. A
 process check is deliberately not part of this test: `lsof +D "$PROJECT_DIR"` also lists the
 ship session's own Claude process, its shell, and `lsof` itself, all of which have that
 directory as an ancestor of their cwd — so a process-based check reads "alive" unconditionally
@@ -395,7 +417,7 @@ apart, which is exactly why *Crash recovery* below stops the dispatch before tre
 # THIS project's own encoded-cwd directory — never a scan across every project's transcripts.
 STORY="${IN_FLIGHT_STORY}"   # in_flight.story, read from the state file
 ENCODED_CWD=$(printf '%s' "$PROJECT_DIR" | sed 's/[\/.]/-/g')
-TRANSCRIPT=$(ls -t ~/.claude/projects/"$ENCODED_CWD"/*/subagents/agent-adrawbar-story-lead-"$STORY"-*.jsonl 2>/dev/null | head -1)
+TRANSCRIPT=$(command ls -t ~/.claude/projects/"$ENCODED_CWD"/*/subagents/agent-adrawbar-story-lead-"$STORY"-*.jsonl 2>/dev/null | head -1)
 
 if [ -z "$TRANSCRIPT" ]; then
   echo "LIVENESS: transcript for drawbar-story-lead-$STORY not found under $ENCODED_CWD — cannot establish liveness, falling back to heartbeat age."
@@ -404,7 +426,7 @@ else
   # (implementer, reviewers) in this story — the newest file there, not the lead's file alone,
   # is the activity signal.
   SUBAGENTS_DIR=$(dirname "$TRANSCRIPT")
-  NEWEST=$(ls -t "$SUBAGENTS_DIR"/*.jsonl 2>/dev/null | head -1)
+  NEWEST=$(command ls -t "$SUBAGENTS_DIR"/*.jsonl 2>/dev/null | head -1)
   MTIME=$(stat -f %m "$NEWEST" 2>/dev/null || stat -c %Y "$NEWEST" 2>/dev/null)
   MTIME_AGE_S=$(( $(date +%s) - MTIME ))
 
@@ -448,6 +470,13 @@ failed story and three garbage PRs stacked on nothing. `assert-chain` refuses it
 `branch_commitless` — a reason deliberately distinct from `branch_moved`, because a commitless
 branch is safe to reset and a moved one never is.
 
+The first story's link to the trunk is judged against the remote-tracking ref
+`refs/remotes/origin/<baseBranch>`, not the local trunk branch: several sessions may share one checkout and
+fast-forward the local trunk at any time, and the trunk moving forward is harmless. The caller
+fetches first (the gate below does), and a failed fetch refuses rather than passing on stale
+data. Links between stories are still checked against their local predecessor branch, exactly as
+before.
+
 This gate is **executable, not advisory**. A rule stated only in prose can be reasoned past;
 this one refuses.
 
@@ -476,11 +505,18 @@ RESOLVED=$(echo "$LINEAR_FACTS_JSON" | bun run "${CLAUDE_PLUGIN_ROOT}/scripts/li
   || { echo "FATAL: ship-config validation refused — see stderr above."; exit 1; }
 ENV_DIR=$(echo "$RESOLVED" | jq -r '.envDir // empty')
 PROJECT_DIR=$(echo "$RESOLVED" | jq -r '.projectDir // empty')
-for v in ENV_DIR PROJECT_DIR; do
+BASE_BRANCH=$(echo "$RESOLVED" | jq -r '.baseBranch // empty')
+for v in ENV_DIR PROJECT_DIR BASE_BRANCH; do
   val="${!v}"
   [ -n "$val" ] && [ "$val" != "null" ] || { echo "FATAL: $v is empty or null after validation — refusing."; exit 1; }
 done
 STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
+
+# `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it
+# here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a
+# story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
+  || { echo "NO_DISPATCH: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 
 # Echo `.reason` and NOTHING else — `.detail` carries absolute paths and the real repo slug,
 # and this repo is public.
@@ -869,6 +905,11 @@ STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
 
 # Check 1 of 3 — chain integrity. `--project-dir` is the operator-authored trust root, taken
 # from the fresh validate above, never from the state file's own `resolved_config` copy.
+# `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it
+# here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a
+# story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
+  || { echo "NO_PR: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 CHAIN_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" assert-chain --state "$STATE" --project-dir "$PROJECT_DIR")
 CHAIN_OK=$(printf '%s' "${CHAIN_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then "true" else "false" end' 2>/dev/null)
 # Echo the verdict's `.reason` and NOTHING else. `.detail` carries absolute paths and the real
@@ -896,9 +937,10 @@ PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(
 else
 # `gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a
 # subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this
-# fence uses, never `$PWD` on its own. `assert-chain` above already confirmed `$BASE` (this
-# story's real parent) is an ancestor branch that exists, so `gt track` is only ever told a
-# parent this fence has already verified.
+# fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch;
+# `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain,
+# so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it
+# checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.)
 git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
   || { echo "NO_PR: could not check out $BRANCH to track it with Graphite — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
 ( cd "$PROJECT_DIR" && gt track --parent "$BASE" ) \
@@ -910,28 +952,51 @@ git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
 # opens or updates the PR — with a title and description Graphite derives from the branch's
 # commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit`
 # immediately below overwrites both with those same two files, the same source `gh pr create`
-# reads from in the other arm. Both arms default to a non-draft PR: `gt submit` defaults
-# `--draft` to false exactly as an unflagged `gh pr create` does, so no `--draft` flag is needed
-# on either side to keep them matched.
-( cd "$PROJECT_DIR" && gt submit --no-edit ) \
+# reads from in the other arm. Both arms must open a non-draft PR, and this one only does with
+# `--publish`: in a non-interactive shell (an agent's) `gt submit` prints "Running in
+# non-interactive mode" and creates new PRs in draft mode, where an unflagged `gh pr create`
+# opens a ready PR. `--publish` overrides that default so this arm matches the other.
+( cd "$PROJECT_DIR" && gt submit --no-edit --publish ) \
   || { echo "NO_PR: gt submit failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+# Graphite can write its own commit-message description into the PR AFTER `gt submit` returns
+# (observed twice: it overwrote the body this fence had just set), so a single `gh pr edit` and
+# one read-back is a race. `gh pr edit` returning success is not proof its write landed with this
+# exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as
+# one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all:
+# long enough for an asynchronous Graphite sync to finish, short enough not to stall an
+# unattended run). An attempt succeeds only when the body read back starts with the same first
+# line `$PR_BODY_FILE` was built with AND still does after a 5 second settle and a second read: a
+# match straight after the edit proves nothing if Graphite's write lands a moment later, and
+# running on with Graphite's description is worse than parking. 5 seconds is a few times the
+# latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only
+# after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case
+# is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls.
+# Only after the last attempt does the fence refuse.
+PR_BODY_ATTEMPTS=4
+PR_BODY_SETTLE=5
+PR_BODY_TRY=1
+PR_BODY_WAIT=2
+PR_BODY_OK=false
+while [ "$PR_BODY_TRY" -le "$PR_BODY_ATTEMPTS" ]; do
 gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \
-  || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+  && PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
+  && [ "${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK" ] \
+  && sleep "$PR_BODY_SETTLE" \
+  && PR_BODY_SETTLED_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
+  && [ "${PR_BODY_SETTLED_CHECK#reviewed at }" != "$PR_BODY_SETTLED_CHECK" ] \
+  && PR_BODY_OK=true
+[ "$PR_BODY_OK" = "true" ] && break
+if [ "$PR_BODY_TRY" -lt "$PR_BODY_ATTEMPTS" ]; then sleep "$PR_BODY_WAIT"; PR_BODY_WAIT=$((PR_BODY_WAIT * 2)); fi
+PR_BODY_TRY=$((PR_BODY_TRY + 1))
+done
+[ "$PR_BODY_OK" = "true" ] \
+  || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set and confirmed after $PR_BODY_ATTEMPTS attempts — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 # `gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same
 # way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the
 # PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly
 # as strictly as a `gh`-opened one.
 PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \
   || { echo "PR_UNRECORDED: gt submit opened the PR but it could not be read back — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
-# `gh pr edit` returning success is not proof its write landed with this exact content — read the
-# body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the
-# content this arm wrote can never silently diverge from what the file on disk actually held.
-PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
-  || { echo "PR_UNRECORDED: the PR body could not be read back to confirm it — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
-case "$PR_BODY_CHECK" in
-  "reviewed at "*) ;;
-  *) echo "PR_UNRECORDED: the PR body does not start with the expected first line after gh pr edit — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1;;
-esac
 fi
 
 # --- pr number shape gate --------------------------------------------------------------------
@@ -957,6 +1022,8 @@ printf '%s\n' "$NEXT_STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE" || { echo
 # Round-trip what was just written through `parseRunState` — `assert-chain` parses the state
 # with it and re-verifies the chain including the entry appended above. A wrong JSON type is
 # caught HERE, in the step that wrote it, instead of bricking every later read.
+git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
+  || { echo "PR_UNRECORDED: could not fetch origin/$BASE_BRANCH for the round-trip check — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 VERIFY_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" assert-chain --state "$STATE" --project-dir "$PROJECT_DIR")
 VERIFY_OK=$(printf '%s' "${VERIFY_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then "true" else "false" end' 2>/dev/null)
 [ "$VERIFY_OK" = "true" ] || { VERIFY_REASON=$(printf '%s' "${VERIFY_JSON:-null}" | jq -r '.reason // "unreadable-verdict"' 2>/dev/null); echo "PR_UNRECORDED: the recorded stack entry did not round-trip ($VERIFY_REASON) — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
@@ -1094,23 +1161,17 @@ for the full reasoning. There is no second, hand-copied bash implementation of a
 > only, so archived knowledge vanishes silently. A stray `archive` moved over a thousand
 > entries out of reach in one command. `add` / `recall` / `reindex` only.
 
-**Also record this story's ticket-quality signal here, at the point of use, not from a retro.**
-This pipeline has no equivalent of `drawbar-work`'s Ready bar or gate-escapes step, so this is the
-only place any of it gets recorded. A `false_claims` entry is an `escape` — the ticket or brief
-carried it and nothing caught it until delivery. A freshly-filed `out_of_scope` entry (a fresh
-sub-issue above, not a re-found match) is an `escape` too — the ticket's own scope missed it. A
-surviving or closed `findings[]` entry is a `finding`, recorded against whichever reviewer raised it
-and whichever outcome actually happened (`accepted`, `rebutted`, or `waived`). If `tq-ledger` is
-installed, run `tq-ledger record escape --story "$STORY" --rule TQ1 --note "..."` for each of the
-first two, and `tq-ledger record finding --story "$STORY" --rule TQ<n> --reviewer <name> --outcome
-<outcome> --note "..."` for each of the third. If it is not installed, skip all of it — never fail
-or delay the story for a missing ledger.
-
 ## 7. Advance
 
-Append the story to `stories_done`. `in_flight` is **not** cleared here — §5 (post the
-summary comment) does not clear it either; it is cleared only by *Parking a story* and
-*Crash recovery* below. `PushNotification`
+Append the story to `stories_done` **and set `in_flight` to `null` in that same state write**
+(one `jq` edit, then the `$STATE.tmp` + `mv` rename used for the `stack` entry above — never
+two writes, so no crash can leave the story done with its claim still held). Without the
+clear, the next story cannot dispatch until the liveness test reads the finished lead as dead
+or 2x the heartbeat passes. The clear is safe here because §5 (post the summary comment)
+and the knowledge sync already ran: a crash before this write still leaves `in_flight` set and routes to *Crash
+recovery*, which resumes at the summary comment. Step 2's verdict also treats an `in_flight` whose story is in
+`stories_done` and has a `stack` entry as spent, so a missed clear or an older state file
+cannot stall the run. `PushNotification`
 one line: story id, PR link, sub-issues filed. `ScheduleWakeup`
 for the next story (under `/loop`), or report and finish.
 
@@ -1220,12 +1281,17 @@ worse than any delay.
    # --- derive from the resolved config (crash recovery) --------------------------------------
    ENV_DIR=$(echo "$RESOLVED" | jq -r '.envDir // empty')
    PROJECT_DIR=$(echo "$RESOLVED" | jq -r '.projectDir // empty')
-   for v in ENV_DIR PROJECT_DIR; do
+   BASE_BRANCH=$(echo "$RESOLVED" | jq -r '.baseBranch // empty')
+   for v in ENV_DIR PROJECT_DIR BASE_BRANCH; do
      val="${!v}"
      [ -n "$val" ] && [ "$val" != "null" ] || { echo "FATAL: $v is empty or null after validation — refusing."; exit 1; }
    done
    # --- end derive from the resolved config (crash recovery) ----------------------------------
    STATE="$ENV_DIR/.drawbar/runs/$ARG.json"
+
+   # Fetch the trunk ref `assert-chain` judges stack[0] against (it never fetches). A failed fetch refuses.
+   git -C "$PROJECT_DIR" fetch --quiet origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" \
+     || { echo "PARK: could not fetch origin/$BASE_BRANCH — refusing rather than judge the chain on a stale trunk; park the story."; exit 1; }
 
    # Chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh
    # validate above, never from the state file's own `resolved_config` copy. Echo the verdict's
@@ -1337,12 +1403,14 @@ then `ScheduleWakeup({stop: true})`.
 
 - Sequential. One story per invocation. Never parallel.
 - Halt on failure; never skip a story.
+- **Run each fence from this file every time; never copy a fence into a script and reuse it — a copy freezes the fence and misses later fixes.** On 2026-10-06 the ffl ship session copied step 4's fence into its own `open-pr.sh` and kept running that copy after the fence changed, so two stories hit a race the file had already fixed, and each needed a hand repair of the run state.
+- **After any compaction, and before the next story after a drawbar update, re-invoke /drawbar:drawbar-ship.** The command text is injected once per invocation, so a session that keeps going on the old text runs old fences; on 2026-10-06 a compaction re-injected stale text from before a fix had landed.
 - `--base` comes from `scripts/lib/stack.ts`'s `resolveBase`, invoked as `stack.ts resolve-base`:
   the configured `baseBranch` for the first story of a run, the previous story's recorded branch
   for every story after that (Locked A). Never re-derive it in bash, never read it out of the
   run-state file by hand, and never omit `--base`.
 - **Never dispatch story N+1 onto a branch with no commits.** §2's `assert-chain` gate runs
-  before every dispatch and refuses `branch_commitless`. That reason is distinct from
+  before every dispatch (after fetching the remote-tracking trunk) and refuses `branch_commitless`. That reason is distinct from
   `branch_moved` on purpose: a commitless branch is safe to reset, a moved one never is.
 - **The orchestrator performs no git write against a worktree an agent holds.** A plain
   `git push` from the orchestrator once ran the pre-push hook against a worktree an implementer

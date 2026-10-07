@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { readFileSync, mkdtempSync, writeFileSync, existsSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { readFileSync, mkdtempSync, readdirSync, writeFileSync, existsSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -268,6 +268,9 @@ describe("ported files carry no private-org identifiers (leak regression)", () =
           // the config path (preceded by a backtick, so the leading "." isn't trimmed off the
           // way it is at line 47), and a prose word/word pair. Neither is an org/repo slug.
           ".drawbar/ship.config.json",
+          // PCO-374/375/376 fix pass addition — the resolver's own config path, alongside its
+          // sibling `.drawbar/ship.config.json` above. Not an org/repo slug.
+          ".drawbar/config.json",
           // PCO-351 (S6) addition — a prose word/word pair. Not an org/repo slug. (A fix pass
           // removed a third entry, "5/7." — the section cross-reference it allowlisted was
           // reworded to "step 5" to avoid the slash entirely, rather than widen this
@@ -633,6 +636,20 @@ describe("Preflight's Linear-facts stdin shape matches ship-config.ts's isLinear
     expect(assembleComment).toContain(`Assemble \`${expectedShape}\``);
     expect(assembleComment).not.toContain("statuses");
     expect(assembleComment).not.toContain("list_issue_statuses");
+  });
+
+  test("Hard rules forbid copying a fence into a reusable script", () => {
+    const doc = readNonEmpty(join(root, "commands/drawbar-ship.md"));
+    const hard = doc.slice(doc.indexOf("## Hard rules"));
+    expect(hard).toContain("Run each fence from this file every time; never copy a fence into a script and reuse it");
+    expect(hard).toContain("a copy freezes the fence and misses later fixes");
+    expect(hard).toContain("2026-10-06");
+  });
+
+  test("Hard rules require re-invoking the command after compaction or a drawbar update", () => {
+    const doc = readNonEmpty(join(root, "commands/drawbar-ship.md"));
+    const hard = doc.slice(doc.indexOf("## Hard rules"));
+    expect(hard).toContain("After any compaction, and before the next story after a drawbar update, re-invoke /drawbar:drawbar-ship.");
   });
 
   test("the list_issue_statuses connectivity check names a real consumer, not the deleted status-transition rationale", () => {
@@ -1043,13 +1060,29 @@ describe("in_flight is cleared at the two surviving Locked-13 narrative sites in
     expect(crashSection).toContain("**clear `in_flight`** (`in_flight: null`) before halting");
   });
 
-  // REGRESSION (Important 4, PCO-364 R1): §7 used to falsely claim the deleted §5 already
-  // cleared `in_flight` on report. Pin the honest gap statement and reject the false claim's
-  // reintroduction.
-  test("'## 7. Advance' states the report-site in_flight gap honestly, not the false §5 claim", () => {
+  // Step 7 used to leave `in_flight` set after a success, which stalled the next dispatch for
+  // 20+ minutes per story. It now clears in the same write that appends to `stories_done`.
+  test("'## 7. Advance' clears in_flight in the same write that appends to stories_done", () => {
     const advanceSection = section("## 7. Advance", "## Parking a story");
     expect(advanceSection).not.toContain("step 5 already cleared it");
-    expect(advanceSection).toContain("`in_flight` is **not** cleared here");
+    expect(advanceSection).not.toContain("`in_flight` is **not** cleared here");
+    expect(advanceSection).toContain("Append the story to `stories_done` **and set `in_flight` to `null` in that same state write**");
+    expect(advanceSection).toContain("a crash before this write still leaves `in_flight` set and routes to *Crash recovery*");
+  });
+
+  test("step 2 treats an in_flight whose story is in stories_done and stacked as spent", () => {
+    const dispatch = section("## 2. Delegate the whole story", "## 3. File out-of-scope");
+    expect(dispatch).toContain("already in `stories_done` and has a `stack` entry");
+  });
+
+  // On Reid's laptops `ls` is an alias for eza, whose `-t` takes a field argument; a bare
+  // `ls -t` finds nothing and the liveness test misreads a live lead.
+  test("the liveness commands never call a bare ls", () => {
+    const doc = readNonEmpty(join(root, "commands/drawbar-ship.md"));
+    const lsTimeLines = doc.split("\n").filter((l) => /\bls -t\b/.test(l));
+    expect(lsTimeLines.length).toBeGreaterThan(0);
+    for (const l of lsTimeLines) expect(l).toContain("command ls -t");
+    expect(doc).not.toMatch(/(^|[^d] )ls -t/m);
   });
 });
 
@@ -1182,7 +1215,7 @@ describe("PCO-352 S7: blocker gate clauses, Locked-11 halt, Unplanned filing", (
     });
   });
 
-  describe("step 1's blocker rule carries its three clauses (Locked 9)", () => {
+  describe("step 1's blocker rule carries its four clauses (Locked 9)", () => {
     function step1(): string {
       return slice("## 1.", "## 2.");
     }
@@ -1205,6 +1238,20 @@ describe("PCO-352 S7: blocker gate clauses, Locked-11 halt, Unplanned filing", (
         "the **unsatisfied** blocker is **itself a member of this snapshot** and not yet in `stories_done`",
       );
       expect(s1).toContain("**Re-sort and continue**");
+    });
+
+    test("clause 4: a blocker done in this run, anywhere in stack[], clears it", () => {
+      const s1 = step1();
+      expect(s1).toContain("exactly one of the following four");
+      expect(s1).toContain("Clauses 1, 2 and 4 **clear** the blocker");
+      expect(s1).toContain("the blocker is in `stories_done` of **this run**");
+      const flat = s1.replace(/\s+/g, " ");
+      expect(flat).toContain("**any** entry, not only the last");
+      expect(flat).toContain("relies on the chain being intact");
+      expect(flat).toContain("step 2's `assert-chain` gate proves");
+      expect(flat).not.toContain("that entry is the **last** one in `stack[]`");
+      expect(flat).toContain("A blocker outside the snapshot, or in the snapshot but not done in this run, keeps today's behavior");
+      expect(s1).toContain("Clause 4 exists because step 5 leaves every story `In Progress`");
     });
 
     // Critical 4 (fix pass): clause 3 sat inside the "satisfies the gate" list, reading as
@@ -1377,15 +1424,20 @@ describe("PCO-352 S7: blocker gate clauses, Locked-11 halt, Unplanned filing", (
 //   - project-config.ts joins the second set: it is the resolver that replaced the hardcoded
 //     `PCO` team and the per-worktree `$PWD/.drawbar/memory` store path. It is not a blocker
 //     gate and implements no topological sort, which is what Locked 4 forbids.
+//   - OTHER_ADDED covers additions unrelated to the PCO-352 epic entirely: await-report.ts and
+//     await-report-hook.ts (rk-0929) make a drawbar-story-lead's wait for a dispatched
+//     sub-agent's report mechanical instead of prose, and back a SubagentStop hook that blocks
+//     a premature stop. Neither implements a blocker gate or a topological sort.
 // PCO-364 (R1) removed coderabbit.ts and merge-guard.ts from EPIC_ADDED — deleted, not left
 // dormant (Locked E), along with the merge path and CodeRabbit gating they implemented. Never
 // asserting `length === N`: a literal count would be wrong again the moment any future story
 // adds or removes a module — this test instead asserts every module actually on disk is a
-// member of the UNION of the two sets above (readdirSync, never a hardcoded snapshot list),
+// member of the UNION of the sets above (readdirSync, never a hardcoded snapshot list),
 // and separately confirms no blocker-gate/topo-sort-shaped module exists anywhere.
 describe("PCO-352 S7 Locked 4: no blocker-gate/topo-sort module is added; scripts/lib/ stays within its known set", () => {
   const PRE_EXISTING = new Set(["store.ts", "schema.ts", "fts.ts", "migrate.ts"]);
   const EPIC_ADDED = new Set(["ship-config.ts", "run-state.ts", "kb-sync.ts", "stack.ts", "project-config.ts"]);
+  const OTHER_ADDED = new Set(["await-report.ts", "await-report-hook.ts"]);
 
   function libModules(): string[] {
     const { readdirSync } = require("node:fs") as typeof import("node:fs");
@@ -1397,7 +1449,7 @@ describe("PCO-352 S7 Locked 4: no blocker-gate/topo-sort module is added; script
     const modules = libModules();
     expect(modules.length).toBeGreaterThan(0);
     for (const m of modules) {
-      expect(PRE_EXISTING.has(m) || EPIC_ADDED.has(m), `unexpected module scripts/lib/${m} — not in the known set`).toBe(true);
+      expect(PRE_EXISTING.has(m) || EPIC_ADDED.has(m) || OTHER_ADDED.has(m), `unexpected module scripts/lib/${m} — not in the known set`).toBe(true);
     }
   });
 
@@ -2138,7 +2190,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
       "CONFIG", "CONFIG_REAL", "RESOLVED", "ENV_DIR", "PROJECT_DIR", "REPO", "BASE_BRANCH", "STATE",
       "CHAIN_JSON", "CHAIN_OK", "CHAIN_REASON",
       "BASE_JSON", "BASE", "BASE_REASON",
-      "PR", "PR_BODY_CHECK", "ENTRY", "NEXT_STATE",
+      "PR", "PR_BODY_CHECK", "PR_BODY_ATTEMPTS", "PR_BODY_SETTLE", "PR_BODY_SETTLED_CHECK", "ENTRY", "NEXT_STATE",
       "VERIFY_JSON", "VERIFY_OK", "VERIFY_REASON",
     ];
     for (const name of DERIVED) {
@@ -2201,12 +2253,60 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
       ).toBe(true);
     }
     expect(submitLine, "gt submit must not take --title or --body-file — it has neither flag").not.toMatch(/--title|--body-file/);
+    // gt 1.8.6 creates new PRs as drafts in a non-interactive shell; `--publish` keeps this arm
+    // matching the `gh pr create` arm's non-draft PR.
+    expect(submitLine, "gt submit must carry --publish, or a non-interactive shell opens the PR as a draft").toMatch(/\s--publish(\s|$)/);
     // The title and body this arm actually needs come from `gh pr edit` instead, reading the
     // same two files the other arm's `gh pr create` reads.
     const editLine = oneLine(elseArm, "gh pr edit ", "the fork's `else` arm's gh pr edit invocation");
     expect(editLine).toBe(
       'gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \\',
     );
+  });
+
+  // The stacked arm's title/body write must survive Graphite rewriting the description after
+  // `gt submit` returns (PES run, PR #6995: the read-back failed and the run parked). The edit
+  // and the read-back are one bounded retry loop; only the last attempt's failure refuses.
+  test("the stacked arm re-applies and re-verifies the PR body in a bounded retry loop, and its refusal carries the attempt count", () => {
+    const c = code();
+    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
+    const forkElse = c.indexOf("\nelse\n", forkStart);
+    const forkEnd = c.indexOf("\nfi\n", forkElse);
+    const elseArm = c.slice(forkElse, forkEnd);
+    expect(elseArm).toContain("PR_BODY_ATTEMPTS=4\n");
+    const whileAt = elseArm.indexOf('while [ "$PR_BODY_TRY" -le "$PR_BODY_ATTEMPTS" ]; do');
+    const doneAt = elseArm.indexOf("\ndone\n", whileAt);
+    expect(whileAt, "the retry loop is missing").toBeGreaterThan(-1);
+    expect(doneAt).toBeGreaterThan(whileAt);
+    const loop = elseArm.slice(whileAt, doneAt);
+    // The re-apply and the read-back both sit INSIDE the loop, so every attempt re-writes the body.
+    expect(loop).toContain('gh pr edit "$BRANCH"');
+    expect(loop).toContain('gh pr view "$BRANCH" --repo "$REPO" --json body -q .body');
+    expect(loop).toContain('"${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK"');
+    // Acceptance needs BOTH reads: a match, a settle sleep, a second read that also matches, in
+    // that order, all before PR_BODY_OK=true, so an overwrite landing after the first read fails the attempt.
+    expect(elseArm).toContain("PR_BODY_SETTLE=5\n");
+    const iFirst = loop.indexOf('"${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK"');
+    const iSleep = loop.indexOf('sleep "$PR_BODY_SETTLE"');
+    const iSecondRead = loop.indexOf("PR_BODY_SETTLED_CHECK=$(gh pr view");
+    const iSecondCmp = loop.indexOf('"${PR_BODY_SETTLED_CHECK#reviewed at }" != "$PR_BODY_SETTLED_CHECK"');
+    const iOk = loop.indexOf("&& PR_BODY_OK=true");
+    expect(iFirst).toBeGreaterThan(-1);
+    expect(iSleep).toBeGreaterThan(iFirst);
+    expect(iSecondRead).toBeGreaterThan(iSleep);
+    expect(iSecondCmp).toBeGreaterThan(iSecondRead);
+    expect(iOk).toBeGreaterThan(iSecondCmp);
+    // Bounded: the counter increments, backoff doubles, and no wait follows the last attempt.
+    expect(loop).toContain("PR_BODY_TRY=$((PR_BODY_TRY + 1))");
+    expect(loop).toContain("PR_BODY_WAIT=$((PR_BODY_WAIT * 2))");
+    expect(loop).toContain('if [ "$PR_BODY_TRY" -lt "$PR_BODY_ATTEMPTS" ]; then sleep "$PR_BODY_WAIT"');
+    expect(loop).not.toContain("exit 1");
+    // Nothing outside the loop re-reads the body: one gh pr edit in the arm, inside the loop.
+    expect(elseArm.match(/gh pr edit /g)!.length).toBe(1);
+    // The refusal comes only after the loop and names the attempt count.
+    const refusal = elseArm.slice(doneAt).match(/echo "PR_UNRECORDED: [^"]*"/);
+    expect(refusal, "no refusal after the loop").not.toBeNull();
+    expect(refusal![0]).toContain("$PR_BODY_ATTEMPTS attempts");
   });
 
   test("CRITICAL 3: the not-empty / not-\"null\" assert loop covers the WHOLE derived set, per variable", () => {
@@ -3253,14 +3353,17 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     // failure, not Outcome A — `gh pr edit` failing, the PR-URL read-back failing, the PR-body
     // read-back failing, and the PR body not carrying its expected first line, are all
     // `PR_UNRECORDED:`, not `NO_PR:`. Total NO_PR: 1 (assert-chain) + 1 (resolve-base) + 1
-    // (gh pr create) + 3 (checkout/track/submit) = 6.
+    // (gh pr create) + 3 (checkout/track/submit) + 1 (trunk fetch before assert-chain, which
+    // refuses rather than judge the chain on a stale remote-tracking trunk) = 7.
     const noPr = [...c.matchAll(/echo "NO_PR: [^"]*"/g)].map((m) => m[0]);
-    expect(noPr.length, "NO_PR: must mark exactly the required pre-PR checks of Outcome A").toBe(6);
+    expect(noPr.length, "NO_PR: must mark exactly the required pre-PR checks of Outcome A").toBe(7);
     for (const site of noPr) {
       expect(site, `a NO_PR: site claims a PR is open — that is Outcome C: ${site}`).not.toContain("PR is open");
     }
+    // 13 since the round-trip assert-chain got its own trunk fetch (a failed fetch there is Outcome C: the PR is already open).
+    // 11 since the stacked arm's edit, read-back and first-line check became one bounded retry loop with a single refusal.
     const unrecorded = [...c.matchAll(/echo "PR_UNRECORDED: [^"]*"/g)].map((m) => m[0]);
-    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(12);
+    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(11);
     for (const site of unrecorded) {
       expect(site, `an Outcome C site does not say the PR is open: ${site}`).toContain(
         "— the PR is open; park the story with that reason (Outcome C) and repair the run state by hand.",
@@ -4392,7 +4495,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
     },
     {
       doc: "ship",
-      anchor: "not** cleared here — §5 (post the summary comment) does not clear it either",
+      anchor: "because §5 (post the summary comment) and the knowledge sync already ran",
       ns: [{ n: 5, title: "Post the summary comment" }],
     },
     // Crash recovery's step 4 (fix pass): the already-stacked resume target. The reference and
@@ -7201,11 +7304,16 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
     expect(docUnits(docSection(SL_374, SL5))).toEqual([
       "## 5. Review, and exactly one fix pass",
       "Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one message. " +
-        "Give the code reviewer the acceptance criteria; give the security reviewer `$KB`. Give " +
-        "both the story's Linear issue id — each reads the spec from Linear itself, because the " +
-        "brief you wrote is a summary and a summary cannot carry what the spec struck — and give " +
-        "both `$PROJECT_DIR`, because each reads its own `reviewed_sha` off the tree with `git " +
-        "-C` and a subagent's working directory is not guaranteed to be the project's.",
+        "Give each `model: \"opus\"` named explicitly in your `Agent` call so you never have to " +
+        "search for their definition files. Drawbar's agents are at `~/.claude/skills/drawbar/agents/` " +
+        "on Reid's laptops, not under `~/.claude/plugins/`. A lookup that fails is not a reason to " +
+        "choose a different model: one lead on 2026-09-29 searched only `~/.claude/plugins/`, found " +
+        "nothing, and ran both reviews on Sonnet. Give the code reviewer the acceptance criteria; " +
+        "give the security reviewer `$KB`. Give both the story's Linear issue id — each reads the " +
+        "spec from Linear itself, because the brief you wrote is a summary and a summary cannot " +
+        "carry what the spec struck — and give both `$PROJECT_DIR`, because each reads its own " +
+        "`reviewed_sha` off the tree with `git -C` and a subagent's working directory is not " +
+        "guaranteed to be the project's.",
       "**A malformed reviewer report is not an approval — it is a failed review, and it parks " +
         "the story.** A report is malformed when it omits `spec_source`, omits `reviewed_sha`, " +
         "carries a finding without a `dedup_key`, or — from the security-reviewer alone, whose " +
@@ -7717,14 +7825,14 @@ const SH4_FENCE_COMMENTS: readonly string[] = [
     "MUST-CHECK r3-must-not-source-project-dir-from-pasted-run-state: the trust root is this FRESH validate, run in this block. Never `jq '.resolved_config' \"$STATE\"` and never anything else read out of `runs/` — the state file is agent-writable, and a `--project-dir` taken from it turns stack.ts's equality guard into a tautology about the attacker's own directory.",
     "--- derive from the resolved config (§4) --------------------------------------------------",
     "--- end derive from the resolved config (§4) ----------------------------------------------",
-    "Check 1 of 3 — chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh validate above, never from the state file's own `resolved_config` copy.",
+    "Check 1 of 3 — chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh validate above, never from the state file's own `resolved_config` copy. `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.",
     "Echo the verdict's `.reason` and NOTHING else. `.detail` carries absolute paths and the real repo slug, this repo is public, and the Hard rules require refusal text be paraphrased rather than pasted into `parked_reason`, the §5 comment, or a KB entry.",
     "Check 2 of 3 — the base. Locked A: `resolve-base` is the only producer of this value.",
     "Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and `--body-file` reads it inside `gh`, so no report text is ever part of this command line. A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`: `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever part of a command line either way.",
-    "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. `assert-chain` above already confirmed `$BASE` (this story's real parent) is an ancestor branch that exists, so `gt track` is only ever told a parent this fence has already verified.",
-    "`gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`, `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description` and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still opens or updates the PR — with a title and description Graphite derives from the branch's commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit` immediately below overwrites both with those same two files, the same source `gh pr create` reads from in the other arm. Both arms default to a non-draft PR: `gt submit` defaults `--draft` to false exactly as an unflagged `gh pr create` does, so no `--draft` flag is needed on either side to keep them matched.",
+    "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch; `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain, so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.)",
+    "`gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`, `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description` and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still opens or updates the PR — with a title and description Graphite derives from the branch's commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit` immediately below overwrites both with those same two files, the same source `gh pr create` reads from in the other arm. Both arms must open a non-draft PR, and this one only does with `--publish`: in a non-interactive shell (an agent's) `gt submit` prints \"Running in non-interactive mode\" and creates new PRs in draft mode, where an unflagged `gh pr create` opens a ready PR. `--publish` overrides that default so this arm matches the other.",
+    "Graphite can write its own commit-message description into the PR AFTER `gt submit` returns (observed twice: it overwrote the body this fence had just set), so a single `gh pr edit` and one read-back is a race. `gh pr edit` returning success is not proof its write landed with this exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all: long enough for an asynchronous Graphite sync to finish, short enough not to stall an unattended run). An attempt succeeds only when the body read back starts with the same first line `$PR_BODY_FILE` was built with AND still does after a 5 second settle and a second read: a match straight after the edit proves nothing if Graphite's write lands a moment later, and running on with Graphite's description is worse than parking. 5 seconds is a few times the latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls. Only after the last attempt does the fence refuse.",
     "`gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly as strictly as a `gh`-opened one.",
-    "`gh pr edit` returning success is not proof its write landed with this exact content — read the body back and confirm it starts with the same first line `$PR_BODY_FILE` was built with, so the content this arm wrote can never silently diverge from what the file on disk actually held.",
     "--- pr number shape gate --------------------------------------------------------------------",
     "Never `basename \"$PR_URL\"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.",
     "--- end pr number shape gate -----------------------------------------------------------------",
@@ -8165,7 +8273,9 @@ describe("no shipped instruction hardcodes a team, a project, or a per-worktree 
 
   test("the shipped example config documents every key the resolver accepts", () => {
     const example = JSON.parse(readNonEmpty(join(root, ".drawbar/config.example.json"))) as Record<string, unknown>;
-    expect(Object.keys(example).sort()).toEqual(["memoryDir", "project", "team"]);
+    // PCO-374/375/376 fix pass: sourceGuardSpecs joined the three original keys when the
+    // story-lead's pre-push gate started reading it — see KNOWN_KEYS in project-config.ts.
+    expect(Object.keys(example).sort()).toEqual(["memoryDir", "project", "sourceGuardSpecs", "team"]);
   });
 });
 
@@ -8678,4 +8788,60 @@ describe("git stash is prohibited for git-running agents (drawbar defect 1)", ()
       expect(txt.toLowerCase()).toContain("wip");
     });
   }
+});
+
+// Sessions run fenced shell through the Bash tool, whose shell on the operator's laptops is
+// zsh. Inside double quotes zsh reads `$NAME:r` (and :h :t :e :a :l :u :q :s ...) as a history
+// style modifier, so "+refs/heads/$B:refs/remotes/origin/$B" becomes "+refs/heads/mainefs/...".
+// Bracing the name (`${B}:`) is safe in both bash and zsh.
+describe("fenced shell is zsh-safe", () => {
+  function shellFenceLines(path: string): { line: number; text: string }[] {
+    const out: { line: number; text: string }[] = [];
+    let inFence = false;
+    let shell = false;
+    readNonEmpty(path).split("\n").forEach((text, i) => {
+      const m = text.match(/^\s*```(\S*)/);
+      if (m) {
+        if (inFence) { inFence = false; shell = false; }
+        else { inFence = true; shell = m[1] === "" || /^(bash|sh|zsh|shell)$/.test(m[1]!); }
+        return;
+      }
+      if (inFence && shell) out.push({ line: i + 1, text });
+    });
+    return out;
+  }
+
+  const files: string[] = [];
+  for (const f of readdirSync(join(root, "commands"))) if (f.endsWith(".md")) files.push(join("commands", f));
+  for (const d of readdirSync(join(root, "skills"))) {
+    const p = join("skills", d, "SKILL.md");
+    if (existsSync(join(root, p))) files.push(p);
+  }
+
+  test("the scan covers the ship command and the skills", () => {
+    expect(files).toContain(join("commands", "drawbar-ship.md"));
+    expect(files.length).toBeGreaterThan(5);
+    expect(shellFenceLines(join(root, "commands/drawbar-ship.md")).length).toBeGreaterThan(0);
+  });
+
+  test("no unbraced $NAME is followed by a colon and a letter", () => {
+    const bad: string[] = [];
+    for (const f of files) {
+      for (const { line, text } of shellFenceLines(join(root, f))) {
+        if (/\$[A-Za-z_][A-Za-z0-9_]*:[A-Za-z]/.test(text)) bad.push(`${f}:${line}: ${text.trim()}`);
+      }
+    }
+    expect(bad, `brace these as \${NAME}: so zsh does not read :r/:h/:t as a modifier\n${bad.join("\n")}`).toEqual([]);
+  });
+});
+
+describe("retired ticket-quality ledger", () => {
+  test("no command file tells a session to use tq-ledger", () => {
+    const dir = join(root, "commands");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      expect(readNonEmpty(join(dir, f))).not.toContain("tq-ledger");
+    }
+  });
 });

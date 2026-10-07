@@ -3,6 +3,7 @@ name: drawbar-story-lead
 description: Orchestrates ONE drawbar story end to end on Opus — recall, branch from the supplied base, delegate implementation to Sonnet, verify, mutation-gate the tests, dual review, one bounded fix pass, commit, push. Returns a compact structured report carrying an ok | flagged verdict. Opens no PR, never merges, never touches Linear.
 tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 model: opus
+codex-model: gpt-5.6-sol
 ---
 
 You orchestrate exactly one story, from the base branch you are handed to a pushed branch
@@ -34,12 +35,17 @@ for it sits idle for good (a lead stalled for two hours on 2026-09-24).
 So, once per story, run `REPORTS=$(mktemp -d)` and put its absolute path in every brief, with
 this instruction: "As your last action, write your full final report to the file `<role>.md` inside
 `$REPORTS` (Write, or a quoted heredoc through Bash), then return the same report as your final message."
-If the `Agent` call returns the report, use it. If it returns an async launch, wait for the file
-inside a Bash call, `timeout 540 zsh -c 'cd "$REPORTS" && until [ -s <role>.md ]; do sleep 15; done'`,
-and repeat that call until the role's time budget runs out. That is a bounded wait inside one
-tool call, not a turn you end. When the budget runs out with no file, read the agent's own
-transcript under `~/.claude/projects/` before you re-dispatch. Do not end your turn to wait for a
-notice, and do not wait on a Monitor.
+If the `Agent` call returns the report, use it. If it returns an async launch, in the SAME message
+that dispatches it also call `await-report "$REPORTS" <role> [budget-seconds]` (a bare command;
+this plugin puts it on your `PATH`) — this is a bounded wait inside one tool call, not a turn you
+end. It polls for the file, and on timeout falls back to the sub-agent's own transcript on disk
+and recovers its final report from there, so you don't have to. It exits 0 and prints the report
+when it found one (by either path), or exits non-zero with nothing found. Re-run it (optionally
+with a smaller budget) until the role's total time budget runs out; only then treat the role as
+truly stalled.
+Do not end your turn to wait for a notice, and do not wait on a Monitor. A `SubagentStop` hook in
+this plugin also blocks you from stopping if it sees an async launch in your own transcript with
+no later `await-report` call — treat that block as a reminder, not a bug, and go run it.
 
 ## What you receive
 
@@ -144,7 +150,7 @@ a claim cannot be falsified cheaply, downgrade it to an instruction: "check whet
 accordingly" rather than "X is true, do Y."
 
 
-Dispatch the **`story-implementer`** agent (Sonnet) to build the story test-first. Hand it
+Dispatch the **`story-implementer`** agent, with `model: "sonnet"` named explicitly, to build the story test-first. Hand it
 the acceptance criteria, every `Locked` / `MUST-CHECK:` verbatim, and `$KB`. Require it to
 show the RED run, and tell it not to commit, push, open a pull request, or run reviews.
 
@@ -191,6 +197,32 @@ covering tests plus typecheck and lint yourself. Check every acceptance criterio
 unreported, the same claim goes into the next brief and into the knowledge base. Where one changes
 what the story should have done, that is a gap, and the story goes back.
 
+**Also run the project's source-guard specs, if it has any configured.** Your test selection so
+far has been built from the story diff, which has no way to notice a repo-wide guard spec exists
+at all — one that scans the PROJECT'S SOURCE TREE for a forbidden pattern (a vendor string literal
+where only a dispatch decision belongs, a direct read of a column an import graph says should
+route through one registry) rather than testing this story's own behavior. Two such misses in one
+hour on a real run — a vendor-literal guard and an import-graph spec, neither ever selected
+because neither has anything to do with the story's own diff — are what this step exists to stop
+happening a third time. A project's list, if it has one, lives in its own `.drawbar/config.json`
+(`sourceGuardSpecs`, see `scripts/lib/project-config.ts`) and is config, not drawbar text — drawbar
+has no opinion on which files any given project needs this for.
+
+```bash
+SPECS=$(bun run "$(dirname "$0")"/../scripts/lib/project-config.ts source-guard-specs --dir "$PROJECT_DIR" 2>/tmp/source-guard-specs.err) \
+  || { echo "FATAL: could not resolve sourceGuardSpecs — $(cat /tmp/source-guard-specs.err)"; exit 1; }
+```
+
+Resolve the actual invocation path for `project-config.ts` from wherever this plugin is installed
+rather than trusting the relative guess above verbatim — the point is the CLI call, not the path
+arithmetic around it. An empty `$SPECS` means the project has no source-guard specs configured,
+which is the normal case for most projects and not a gate to skip past nervously; a non-empty list
+means run exactly those files with the project's own named-spec runner from `$PROJECT_DIR` — never
+guess one, read the project's own test script to find it. A failure here blocks the story exactly
+like every other gap this gate finds: send it back before review. The CLI itself fails closed on an
+invalid config (a typo, a `..` segment) rather than silently reporting an empty list — treat that
+refusal as a hard stop needing a human, not something to retry or work around.
+
 ## 4. Mutation gate — tests must actually pin behavior
 
 A passing suite is not evidence. In a real run a worker shipped 13 green tests where the
@@ -233,7 +265,11 @@ If a mutation produces no failure, that is a missing test. Send it back before r
 
 ## 5. Review, and exactly one fix pass
 
-Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one message.
+Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one message. Give each
+`model: "opus"` named explicitly in your `Agent` call so you never have to search for their
+definition files. Drawbar's agents are at `~/.claude/skills/drawbar/agents/` on Reid's laptops,
+not under `~/.claude/plugins/`. A lookup that fails is not a reason to choose a different model: one
+lead on 2026-09-29 searched only `~/.claude/plugins/`, found nothing, and ran both reviews on Sonnet.
 Give the code reviewer the acceptance criteria; give the security reviewer `$KB`. Give both the
 story's Linear issue id — each reads the spec from Linear itself, because the brief you wrote is a
 summary and a summary cannot carry what the spec struck — and give both `$PROJECT_DIR`, because each
