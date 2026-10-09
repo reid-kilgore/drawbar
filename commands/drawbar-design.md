@@ -127,7 +127,7 @@ Grep the draft for stragglers before locking: any symbol you renamed mid-session
 
 Author and edit the spec as a **local draft** — a working scratchpad (repo file or scratch buffer). This is a *draft*, **not** a synced mirror: Linear remains the single source of truth; the draft is just the editing surface and is disposable once locked. Push to the Linear issue description only at genuine lock points (post-review, and after any material constraint change). Note that `save_issue` **replaces the description wholesale** — there is no partial update, so don't author by repeated full-description rewrites in Linear.
 
-Write the final spec as the parent issue's description via the Linear MCP (`save_issue` — create a new issue in the team and project resolved in step 1 if this started from free text, else update the existing one). The spec must be detailed enough that implementation makes zero judgment calls: goal, constraints, locked decisions, architecture, and acceptance criteria.
+Write the final spec as the parent issue's description via the Linear MCP (`save_issue` — create a new issue in the team and project resolved in step 1 if this started from free text, else update the existing one). When the input is a ticket written by someone else (the PM or sales), that is the original ticket: file the spec as a new issue that is its sub-issue (`parentId` = the original), never overwrite the original's description. The spec must be detailed enough that implementation makes zero judgment calls: goal, constraints, locked decisions, architecture, and acceptance criteria.
 
 **Write it plainly.** Complete is not the same as long. Short sentences, one idea each; no
 jargon, no buzzwords, no metaphors dressing up a simple point — say "makes it slower", not

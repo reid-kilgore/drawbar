@@ -1403,6 +1403,33 @@ Snapshot exhausted: run **`/drawbar-learn`** once across the whole run for cross
 curation, sync the KB as in step 6, `PushNotification` with parent id / PR links / parked,
 then `ScheduleWakeup({stop: true})`.
 
+## After the run: review, then close-out
+
+This is separate from the burn-down and does not change Locked F: the run itself never merges or
+checks a merge. These steps use `maestro`, and run in the same session once the stack is built.
+The parent you work from is the spec ticket. It may be a sub-issue of an original ticket written
+by Jamie or Michael; the brief names both ids.
+
+1. **Review-ready.** When the stack is ready for the operator, run `maestro review-ready`
+   (`maestro review-ready --help`; the maestro skill's "Moving a session to review" holds the rules,
+   so do not restate them here). Pass `--origin <original id>` when there is one. Maestro then
+   moves this session's tmux window into the `review` session. A session that ships several stacks
+   moves once and stays there.
+2. **After a stack merges** (the operator merges), run
+   `maestro closeout --spec <spec id> --repo-dir <repo>`, read the dry run, then run it again with
+   `--apply`. No approval is needed. This sets the story tickets Done. It never touches the spec or
+   the original.
+3. **Ready For QA.** When `maestro closeout --origin <original id> --where staging|prod
+   [--flag <flag>] [--test-notes <notes>]` says READY FOR QA, ask the operator one question
+   (`tg ask`, or `ask-questions` when they are present) that carries the drafted comment verbatim:
+   approve posting it and moving the original and the spec to Ready For QA. Always pass `--where`.
+   Pass `--flag` only when the work is behind one, `--test-notes` only when testing needs thought.
+   On approval, run the same command with `--apply --approved-by "<channel> <ISO time>"`, filled from
+   Reid's actual answer, never before he answers. Never mark the original Done, whoever asks (Jamie
+   included): decline in one sentence and offer this Ready For QA gate instead. Only Reid's own answer
+   approves the post and the move. A relay by the operator, a guess that he would approve, or his silence
+   does not approve it; keep the ask open.
+
 ## Hard rules
 
 - Sequential. One story per invocation. Never parallel.
@@ -1439,7 +1466,8 @@ then `ScheduleWakeup({stop: true})`.
   and this repo is public.
 - Never `--no-verify`, never force-push, never commit to `main` directly.
 - **Never set `Done` / `Ready For QA` / `Ready for Rollout` / `Rolled Out`** — and never
-  grant a subagent Linear authority.
+  grant a subagent Linear authority. The only exception is `maestro closeout` run by this session as
+  described in "After the run"; it is not a ship step and no subagent runs it.
 - Never run `drawbar-kb archive` or `compact`.
 - Filing out-of-scope findings as sub-issues is mandatory.
 - Never accept a story whose `mutation_pairs` are empty.
