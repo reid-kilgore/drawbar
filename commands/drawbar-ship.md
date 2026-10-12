@@ -56,6 +56,17 @@ there is no branch for the next story to base on, so the chain has no anchor and
 **parks and halts** (§4, Outcome A). Never collapse the two: `flagged` continues stacking, a
 missing PR stops the night.
 
+**A schema story is never a stack base** (Reid, MAESTRO pane, relayed 2026-10-12: "what we need is
+for the schema to be a fully separate PR not in the stack"). A schema story is one whose diff touches
+the database schema or its migrations (in hourly, `backend/prisma/`). Its PR opens against the
+configured `baseBranch` as its own pull request, and the operator merges it alone, first. The trunk
+takes squash commits only, so after the operator's squash the next story still carries the schema's
+original commits. A queue that replays commits then applies them on top of their own squash and ejects
+the whole stack. That happened to two stacks on 2026-10-12, while GitHub showed every member CLEAN.
+Stories after the schema may stack on the schema branch during the run, because they need its types.
+The app stack is rebuilt onto the trunk after the schema lands ("After the run", step 2). A schema
+story that the snapshot places after an app story cannot become a separate PR, so park it and halt.
+
 **CI runs on the top of the stack only.** A stacked PR's CI workflows skip because its base is not the
 trunk, so a green unlabelled member means skipped, not passed. Exactly one member, the top, carries the
 `run-ci` label, and only until its run is green; see §4's `run-ci` rule for when to add and remove it.
@@ -1415,11 +1426,20 @@ by Jamie or Michael; the brief names both ids.
    so do not restate them here). Pass `--origin <original id>` when there is one. Maestro then
    moves this session's tmux window into the `review` session. A session that ships several stacks
    moves once and stays there.
-2. **After a stack merges** (the operator merges), run
+2. **Schema first, then rebuild the app stack.** This step applies only when the run's first story is a
+   schema story (see "The stack model"). Ask the operator to merge the schema PR alone. Do not queue
+   the app stack, and do not merge the trunk down into it, until that squash has landed. Then run
+   `stack-replay-check --rebuild` on the app stack (`stack-replay-check --help`). It writes rebuilt
+   refs locally, one commit per story on the trunk, and proves that they replay CLEAN and that the
+   top tree is identical to the reviewed top. Put its verdict and the force-push commands it prints
+   into one question to the operator. Only the operator's answer approves a force-push. Then point
+   the bottom app PR's base at the trunk. Before any queue, run `stack-replay-check` again on the
+   pushed branches.
+3. **After a stack merges** (the operator merges), run
    `maestro closeout --spec <spec id> --repo-dir <repo>`, read the dry run, then run it again with
    `--apply`. No approval is needed. This sets the story tickets Done. It never touches the spec or
    the original.
-3. **Ready For QA.** When `maestro closeout --origin <original id> --where staging|prod
+4. **Ready For QA.** When `maestro closeout --origin <original id> --where staging|prod
    [--flag <flag>] [--test-notes <notes>]` says READY FOR QA, ask the operator one question
    (`tg ask`, or `ask-questions` when they are present) that carries the drafted comment verbatim:
    approve posting it and moving the original and the spec to Ready For QA. Always pass `--where`.
@@ -1464,7 +1484,7 @@ by Jamie or Michael; the brief names both ids.
   paraphrased, never pasted**, into `parked_reason`, a Linear comment, or a KB entry. Echo the
   verdict's `.reason` and nothing else: a `detail` carries absolute paths and the real repo slug,
   and this repo is public.
-- Never `--no-verify`, never force-push, never commit to `main` directly.
+- Never `--no-verify`, never commit to `main` directly, and never force-push, except the operator-approved schema rebuild in "After the run", step 2.
 - **Never set `Done` / `Ready For QA` / `Ready for Rollout` / `Rolled Out`** — and never
   grant a subagent Linear authority. The only exception is `maestro closeout` run by this session as
   described in "After the run"; it is not a ship step and no subagent runs it.
