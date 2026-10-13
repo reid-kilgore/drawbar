@@ -72,6 +72,7 @@ not say the value came from that call, do not guess — report `status: parked` 
 ```bash
 drawbar-kb recall "<story title and files>" --dir "$KB" --json
 drawbar-kb recall "MUST-CHECK <stack>" --dir "$KB" --json
+drawbar-kb recall "<story title and files>" --tag hard-to-model --dir "$KB" --json
 ```
 
 Use `$KB` exactly as given — it is absolute. Never `$PWD/.drawbar/memory`: you may be
@@ -85,6 +86,13 @@ brief actively manufactures the violation rather than merely failing to prevent 
 instructed exactly this has already shipped an arbitrary-code-execution sink in this repo; the
 entry forbidding it was in the knowledge base but the recall's query terms never surfaced it, so
 a recall that misses an entry and a brief that drops one fail in the same direction.
+
+**The third recall lists questions earlier sessions could not answer.** A `hard-to-model` hit
+on the story's files is an open question about how that code works. Read it before designing,
+and plan one targeted read of it (a file read, or one explorer) instead of assuming an answer.
+When two targeted rounds of your own leave a question about the code unresolved, record it
+before you finish, following the `hard-to-model` convention in the `drawbar-knowledge` skill.
+A confident answer that later proves wrong is not recorded.
 
 ## 2. Branch and implement
 

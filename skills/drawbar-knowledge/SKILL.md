@@ -54,6 +54,18 @@ Required: `key`, `type`, `content`. `source` defaults to `agent`; `tags`/`files`
 - `investigation` — what a dig uncovered.
 - `deviation` — a departure from plan and why.
 
+## The hard-to-model convention
+
+A `hard-to-model` entry records a question about how part of the code works that is still unresolved after two targeted rounds. A round is one targeted read, or one dispatched explorer or auditor, on that question. Only unresolved questions count: a confident answer that later proves wrong is not recorded. Lead sessions write these entries, and so do gates that detect an unresolved question; a gate that only refuses a false claim does not. Over time the entries show which areas of the code pay off for docs, refactors or codebase-map entries.
+
+Use type `investigation` and the tag `hard-to-model`, plus a `ws:<session or project>` tag, the files involved, and the issue id or null:
+
+```json
+{"key":"htm-<yyyymmdd>-<slug>","type":"investigation","tags":["hard-to-model","ws:<session>"],"files":["backend/src/..."],"issue":"PAS-... or null","content":"Q: <question>. Tried: <the two rounds>. Still open: <what is unknown>. Provenance: <first-hand or inherited>."}
+```
+
+Read them with `drawbar-kb recall "<files>" --tag hard-to-model --dir "$KB" --json`.
+
 ## Recall (read)
 
 ```bash
