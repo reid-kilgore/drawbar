@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONTROL_CHAR_SHAPE, isCleanAbsolutePath, type Runner } from "./ship-config";
 
 // --- what this module is for -----------------------------------------------------------------
@@ -383,6 +383,72 @@ export function resolveContext(input: ResolveInput): ResolveResult {
   };
 }
 
+// --- glob expansion --------------------------------------------------------------------------
+//
+// A `sourceGuardSpecs` entry may be a glob (`backend/tests/**/*WriteSurface.spec.ts`) so a new
+// repo-wide ratchet spec that follows a naming family is picked up without anyone editing the
+// list. A literal path (no glob metacharacter) passes through untouched and is NOT checked for
+// existence — that is the behavior from before globs existed, and the runner reports a missing
+// file itself. A glob that matches nothing is different: it is almost certainly a typo or a
+// renamed family, so it is reported loudly on stderr rather than silently shrinking the gate.
+//
+// Safety: a glob may not be absolute, and (via `checkPathShape` at parse time) may not contain
+// `..`. Matches are additionally re-checked to resolve inside the project dir, symlinks are not
+// followed, output is de-duplicated and, within one glob, sorted — entries keep config order.
+
+const GLOB_META = /[*?[\]{}]/;
+
+export function isGlobPattern(entry: string): boolean {
+  return GLOB_META.test(entry);
+}
+
+export type GlobScan = (pattern: string, cwd: string) => string[];
+
+export const bunGlobScan: GlobScan = (pattern, cwd) =>
+  Array.from(new Bun.Glob(pattern).scanSync({ cwd, onlyFiles: true, dot: false, followSymlinks: false }));
+
+export interface ExpandResult {
+  specs: string[];
+  /** One message per glob that matched nothing or was refused; the caller prints them. */
+  warnings: string[];
+}
+
+export function expandSourceGuardSpecs(entries: string[], projectDir: string, scan: GlobScan = bunGlobScan): ExpandResult {
+  const root = resolve(projectDir);
+  const seen = new Set<string>();
+  const specs: string[] = [];
+  const warnings: string[] = [];
+  const add = (spec: string): void => {
+    if (!seen.has(spec)) {
+      seen.add(spec);
+      specs.push(spec);
+    }
+  };
+  for (const entry of entries) {
+    if (!isGlobPattern(entry)) {
+      add(entry);
+      continue;
+    }
+    if (isAbsolute(entry) || entry.split(/[\\/]+/).includes("..")) {
+      warnings.push(`sourceGuardSpecs glob refused (absolute or '..' path): ${entry}`);
+      continue;
+    }
+    const matches: string[] = [];
+    for (const m of scan(entry, root).sort()) {
+      const abs = resolve(root, m);
+      const rel = relative(root, abs);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || abs !== root + sep + rel) continue;
+      matches.push(rel.split(sep).join("/"));
+    }
+    if (matches.length === 0) {
+      warnings.push(`sourceGuardSpecs glob matched no files: ${entry}`);
+      continue;
+    }
+    for (const m of matches) add(m);
+  }
+  return { specs, warnings };
+}
+
 // --- CLI entry point ---------------------------------------------------------------------------
 //
 // `bun run project-config.ts source-guard-specs --dir <projectDir>` — the one consumer this
@@ -413,6 +479,7 @@ export interface CliMainDeps {
   fs?: { exists: (p: string) => boolean; read: (p: string) => string };
   writeStdout?: (s: string) => void;
   writeStderr?: (s: string) => void;
+  glob?: GlobScan;
 }
 
 export function parseCliArgs(args: string[]): { ok: true; cmd: string; dir: string | undefined } | { ok: false; error: string } {
@@ -455,7 +522,9 @@ export function cliMain(deps: CliMainDeps = {}): number {
     writeStderr(`refused: ${result.reason} (${result.detail})\n`);
     return 1;
   }
-  for (const spec of result.context.sourceGuardSpecs) writeStdout(`${spec}\n`);
+  const expanded = expandSourceGuardSpecs(result.context.sourceGuardSpecs, parsed.dir ?? cwd, deps.glob);
+  for (const w of expanded.warnings) writeStderr(`warning: ${w}\n`);
+  for (const spec of expanded.specs) writeStdout(`${spec}\n`);
   return 0;
 }
 

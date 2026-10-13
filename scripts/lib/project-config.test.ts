@@ -1,4 +1,6 @@
 import { test, expect, describe } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseProjectConfig,
@@ -7,6 +9,8 @@ import {
   resolveContext,
   parseCliArgs,
   cliMain,
+  expandSourceGuardSpecs,
+  isGlobPattern,
   type ResolveInput,
 } from "./project-config";
 import type { Runner } from "./ship-config";
@@ -595,5 +599,109 @@ describe("cliMain", () => {
     });
     expect(code).toBe(0);
     expect(cap.out).toEqual(["a.spec.ts\n"]);
+  });
+});
+
+describe("expandSourceGuardSpecs", () => {
+  function project(files: string[]): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "sg-glob-")));
+    for (const f of files) {
+      mkdirSync(join(dir, f, ".."), { recursive: true });
+      writeFileSync(join(dir, f), "");
+    }
+    return dir;
+  }
+
+  test("isGlobPattern recognises glob metacharacters and not plain paths", () => {
+    expect(isGlobPattern("a/**/*.spec.ts")).toBe(true);
+    expect(isGlobPattern("a/{b,c}.spec.ts")).toBe(true);
+    expect(isGlobPattern("a/b.spec.ts")).toBe(false);
+  });
+
+  test("expands a glob against the project dir, sorted, relative to it", () => {
+    const dir = project(["t/z/bWriteSurface.spec.ts", "t/aWriteSurface.spec.ts", "t/other.spec.ts"]);
+    try {
+      const r = expandSourceGuardSpecs(["t/**/*WriteSurface.spec.ts"], dir);
+      expect(r.specs).toEqual(["t/aWriteSurface.spec.ts", "t/z/bWriteSurface.spec.ts"]);
+      expect(r.warnings).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("literal paths pass through unchecked, including ones that do not exist", () => {
+    const r = expandSourceGuardSpecs(["nope/missing.spec.ts"], "/nonexistent-dir");
+    expect(r.specs).toEqual(["nope/missing.spec.ts"]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  test("a glob that matches nothing warns naming the pattern and adds nothing", () => {
+    const dir = project(["t/a.spec.ts"]);
+    try {
+      const r = expandSourceGuardSpecs(["t/**/*Nope.spec.ts"], dir);
+      expect(r.specs).toEqual([]);
+      expect(r.warnings).toEqual(["sourceGuardSpecs glob matched no files: t/**/*Nope.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("de-duplicates across globs and literals and keeps first-seen config order", () => {
+    const dir = project(["t/a.spec.ts", "t/b.spec.ts"]);
+    try {
+      const r = expandSourceGuardSpecs(["t/b.spec.ts", "t/*.spec.ts", "t/a.spec.ts"], dir);
+      expect(r.specs).toEqual(["t/b.spec.ts", "t/a.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses an absolute glob and a '..' glob with a warning", () => {
+    const r = expandSourceGuardSpecs(["/etc/*.conf", "../x/*.ts"], "/repo/hourly", () => {
+      throw new Error("scan must not run for a refused glob");
+    });
+    expect(r.specs).toEqual([]);
+    expect(r.warnings.length).toBe(2);
+    expect(r.warnings[0]).toContain("/etc/*.conf");
+  });
+
+  test("drops a match that resolves outside the project dir even if the scanner returns one", () => {
+    const r = expandSourceGuardSpecs(["t/*.ts"], "/repo/hourly", () => ["../escape.ts", "t/ok.ts", "/abs/x.ts"]);
+    expect(r.specs).toEqual(["t/ok.ts"]);
+  });
+
+  test("a symlink pointing outside the project is not followed", () => {
+    const outside = project(["secret.spec.ts"]);
+    const dir = project(["t/a.spec.ts"]);
+    try {
+      require("node:fs").symlinkSync(outside, join(dir, "t", "link"));
+      const r = expandSourceGuardSpecs(["t/**/*.spec.ts"], dir);
+      expect(r.specs).toEqual(["t/a.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("cliMain expands globs, warns on stderr for an empty one, and still exits 0", () => {
+    const dir = project(["t/aWriteSurface.spec.ts"]);
+    const out: string[] = [];
+    const err: string[] = [];
+    try {
+      const code = cliMain({
+        argv: ["source-guard-specs", "--dir", dir],
+        cwd: dir,
+        env: { HOME: "/home/dev" },
+        git: gitNoRepo,
+        fs: fsWith({ [join(dir, ".drawbar", "config.json")]: JSON.stringify({ sourceGuardSpecs: ["t/*WriteSurface.spec.ts", "t/*Gone.spec.ts"] }) }),
+        writeStdout: (s) => out.push(s),
+        writeStderr: (s) => err.push(s),
+      });
+      expect(code).toBe(0);
+      expect(out).toEqual(["t/aWriteSurface.spec.ts\n"]);
+      expect(err).toEqual(["warning: sourceGuardSpecs glob matched no files: t/*Gone.spec.ts\n"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
