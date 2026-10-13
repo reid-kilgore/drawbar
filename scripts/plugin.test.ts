@@ -5318,7 +5318,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
   // Pinned on the LITERAL invocation line extracted from §1's raw fence, not on prose beside it
   // (MUST-CHECK prose-pins-dont-cover-the-bash-fence-they-describe): the claim names a query, a
   // flag and an output format, and deleting the line is exactly the mutation that stayed green.
-  test("§1's fence carries BOTH recall invocations, literally, including the MUST-CHECK one", () => {
+  test("§1's fence carries all three recall invocations, literally, including the MUST-CHECK and hard-to-model ones", () => {
     const raw = agentSectionOne(true);
     const fences = [...raw.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]!);
     expect(fences.length, "§1 must carry exactly one bash fence").toBe(1);
@@ -5326,6 +5326,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
     expect(lines).toEqual([
       'drawbar-kb recall "<story title and files>" --dir "$KB" --json',
       'drawbar-kb recall "MUST-CHECK <stack>" --dir "$KB" --json',
+      'drawbar-kb recall "<story title and files>" --tag hard-to-model --dir "$KB" --json',
     ]);
   });
 
