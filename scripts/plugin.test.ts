@@ -3002,7 +3002,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
   test("Locked A: $BASE comes only from resolve-base's verdict, never re-derived in bash or read from the state", () => {
     const c = code();
     expect(oneLine(c, "BASE_JSON=", "§4's resolve-base invocation")).toBe(
-      'BASE_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" resolve-base --state "$STATE" --story "$STORY")',
+      'BASE_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" resolve-base --state "$STATE" --story "$STORY" --project-dir "$PROJECT_DIR")',
     );
     const line = oneLine(c, "BASE=", "§4's BASE derivation");
     expect(line).toBe(
