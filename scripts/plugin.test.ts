@@ -7316,7 +7316,9 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
         "on Reid's laptops, not under `~/.claude/plugins/`. A lookup that fails is not a reason to " +
         "choose a different model: one lead on 2026-09-29 searched only `~/.claude/plugins/`, found " +
         "nothing, and ran both reviews on Sonnet. Give the code reviewer the acceptance criteria; " +
-        "give the security reviewer `$KB`. Give both the story's Linear issue id — each reads the " +
+        "give the security reviewer `$KB`. Give both reviewers the `## Session rules` block, " +
+        "verbatim: a reviewer that runs tests is bound by the same rules as the implementer. " +
+        "Give both the story's Linear issue id — each reads the " +
         "spec from Linear itself, because the brief you wrote is a summary and a summary cannot " +
         "carry what the spec struck — and give both `$PROJECT_DIR`, because each reads its own " +
         "`reviewed_sha` off the tree with `git -C` and a subagent's working directory is not " +
@@ -7348,7 +7350,8 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
         "dropped without recording it is a finding your caller cannot tell from one that was " +
         "never reported.",
       "Fixes are implementation: re-dispatch `story-implementer` in fix mode with the merged " +
-        "findings, require a red→green regression test for any real bug or security finding, then " +
+        "findings (the fix-pass brief carries the `## Session rules` block, verbatim, like every " +
+        "other brief), require a red→green regression test for any real bug or security finding, then " +
         "re-run §3 and §4 on the fixes. Trivial one-liners (a rename, a typo) you may apply " +
         "directly.",
       "**Exactly one fix pass runs, and it carries Critical and Important findings only.** " +
@@ -7575,6 +7578,10 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
   // Both `Inputs` sections now name the Linear issue id as an input. A fourth bullet reading "when
   // no issue id is supplied, the brief you were handed is the spec" reinstates the exact fallback
   // PCO-374 forbids, one section away from where the ordering is pinned.
+  const SESSION_RULES_BULLET =
+    "- A `## Session rules` block in your brief binds every command you run, including tests. " +
+    'If the brief says "none received", follow the project\'s own rules.';
+
   test("code-reviewer's Inputs section carries exactly these units and nothing else", () => {
     expect(docUnits(docSection("agents/code-reviewer.md", "## Inputs you are given"))).toEqual([
       "## Inputs you are given",
@@ -7583,6 +7590,7 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
         "carries it.",
       "- The diff under review (a base..head range or a diff file).",
       PROJECT_DIR_BULLET,
+      SESSION_RULES_BULLET,
     ]);
   });
 
@@ -7593,6 +7601,7 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
       "- The diff under review (a base..head range or a diff file).",
       "- **`$KB`** — the knowledge-base path, absolute, exactly as the lead handed it to you. Use it verbatim; never rebuild it from your own `$PWD`, which inside a linked worktree is a different, empty directory.",
       PROJECT_DIR_BULLET,
+      SESSION_RULES_BULLET,
     ]);
   });
 
@@ -8890,4 +8899,63 @@ describe("retired ticket-quality ledger", () => {
       expect(readNonEmpty(join(dir, f))).not.toContain("tq-ledger");
     }
   });
+});
+
+// A ship brief or session hands the story-lead safety rules (never touch a named table, a
+// DATABASE_URL rule). The lead used to copy them into the implementer's brief only, so a
+// reviewer that ran the tests had no rule against reaching a real database. One shared block,
+// carried verbatim into every brief the lead writes.
+describe("story-lead carries the session's safety rules into every brief it writes", () => {
+  const lead = () => readNonEmpty(join(root, "agents/drawbar-story-lead.md"));
+  const flatLead = () => lead().replace(/\s+/g, " ");
+  const sectionOf = (from: string, to: string) => {
+    const t = lead();
+    const at = t.indexOf(from);
+    expect(at, `${from} must exist`).toBeGreaterThan(-1);
+    return t.slice(at, t.indexOf(to, at + from.length)).replace(/\s+/g, " ");
+  };
+
+  test("defines one `## Session rules` block, taken verbatim from the ship brief or session", () => {
+    const rcv = sectionOf("## What you receive", "## 1. Recall");
+    expect(rcv).toContain("`## Session rules`");
+    expect(rcv).toContain("whatever rules or constraints your ship brief or session handed you");
+    expect(rcv).toContain("copy the block verbatim into every brief you write");
+    expect(rcv).toContain("implementer, fix-pass implementer, code reviewer and security reviewer");
+  });
+
+  test("the implementer brief (§2) carries the block", () => {
+    expect(sectionOf("## 2. Branch and implement", "## 3. Verification gate")).toContain("the `## Session rules` block, verbatim");
+  });
+
+  test("the fix-pass implementer brief (§5) carries the block", () => {
+    const s5 = sectionOf("## 5. Review, and exactly one fix pass", "## 6. Commit and push");
+    expect(s5).toContain("fix-pass brief carries the `## Session rules` block, verbatim");
+  });
+
+  test("the code reviewer and security reviewer briefs (§5) each carry the block", () => {
+    const s5 = sectionOf("## 5. Review, and exactly one fix pass", "## 6. Commit and push");
+    expect(s5).toContain("Give both reviewers the `## Session rules` block, verbatim");
+    expect(s5).toContain("a reviewer that runs tests is bound by the same rules as the implementer");
+  });
+
+  test("the rule says why: a reviewer that ran tests with no database rule reached none only by luck", () => {
+    expect(flatLead()).toContain("A rule left out of a reviewer's brief is a rule that reviewer never heard");
+  });
+});
+
+describe("reviewers and the implementer are bound by the brief's `## Session rules` block", () => {
+  const LINE =
+    "A `## Session rules` block in your brief binds every command you run, including tests. " +
+    'If the brief says "none received", follow the project\'s own rules.';
+  for (const rel of ["agents/code-reviewer.md", "agents/security-reviewer.md", "agents/story-implementer.md"]) {
+    test(`${rel} states that the block binds every command, tests included`, () => {
+      const raw = readNonEmpty(join(root, rel));
+      const txt = raw.replace(/\s+/g, " ");
+      expect(txt).toContain(LINE);
+      // It sits in the Inputs section, before the first step, so it is read before any command runs.
+      const inputs = raw.indexOf("## Inputs you are given");
+      const section = raw.slice(inputs, raw.indexOf("\n## ", inputs + 5)).replace(/\s+/g, " ");
+      expect(section).toContain(LINE);
+    });
+  }
 });

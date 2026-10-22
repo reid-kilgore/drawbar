@@ -53,6 +53,16 @@ The brief names: the story id, its full description and acceptance criteria, eve
 `Locked` decision and `MUST-CHECK:`, the absolute `$KB` path, `$PROJECT_DIR`, `$REPO`,
 `$BASE_BRANCH`, and the branch name to use.
 
+**It may also name safety rules: whatever rules or constraints your ship brief or session handed
+you** (never touch a named table, how `DATABASE_URL` may be set, which services a test may reach).
+Collect them once into a `## Session rules` block, in the words you were given. Do not summarise
+or reword them. Then copy the block verbatim into every brief you write: the implementer,
+fix-pass implementer, code reviewer and security reviewer. A rule left out of a reviewer's brief
+is a rule that reviewer never heard: a code reviewer once ran the tests with no `DATABASE_URL`
+rule in its brief and reached no database only because the value in `.env` was dead. If you
+received no such rules, write `## Session rules: none received` instead, so no brief is silent
+about them.
+
 **`$BASE_BRANCH` is the base this story stacks on — for every story after the first it is
 the previous story's branch, and it is NOT the repo's default branch.** Only on the run's
 first story does it happen to coincide with the configured base. Cut from whatever you are
@@ -159,7 +169,7 @@ accordingly" rather than "X is true, do Y."
 
 
 Dispatch the **`story-implementer`** agent, with `model: "sonnet"` named explicitly, to build the story test-first. Hand it
-the acceptance criteria, every `Locked` / `MUST-CHECK:` verbatim, and `$KB`. Require it to
+the acceptance criteria, every `Locked` / `MUST-CHECK:` verbatim, the `## Session rules` block, verbatim, and `$KB`. Require it to
 show the RED run, and tell it not to commit, push, open a pull request, or run reviews.
 Put the line `Lessons: report` in every implementer brief, fix-pass briefs included: this is a
 ship run, so the implementer returns its lessons in its report and never appends to the store itself.
@@ -281,7 +291,7 @@ Dispatch **`code-reviewer`** and **`security-reviewer`** in parallel, in one mes
 definition files. Drawbar's agents are at `~/.claude/skills/drawbar/agents/` on Reid's laptops,
 not under `~/.claude/plugins/`. A lookup that fails is not a reason to choose a different model: one
 lead on 2026-09-29 searched only `~/.claude/plugins/`, found nothing, and ran both reviews on Sonnet.
-Give the code reviewer the acceptance criteria; give the security reviewer `$KB`. Give both the
+Give the code reviewer the acceptance criteria; give the security reviewer `$KB`. Give both reviewers the `## Session rules` block, verbatim: a reviewer that runs tests is bound by the same rules as the implementer. Give both the
 story's Linear issue id — each reads the spec from Linear itself, because the brief you wrote is a
 summary and a summary cannot carry what the spec struck — and give both `$PROJECT_DIR`, because each
 reads its own `reviewed_sha` off the tree with `git -C` and a subagent's working directory is not
@@ -314,7 +324,7 @@ Every collapse and every suppression goes into the report's `dedup` array — a 
 without recording it is a finding your caller cannot tell from one that was never reported.
 
 Fixes are implementation: re-dispatch `story-implementer` in fix mode with the merged
-findings, require a red→green regression test for any real bug or security finding, then
+findings (the fix-pass brief carries the `## Session rules` block, verbatim, like every other brief), require a red→green regression test for any real bug or security finding, then
 re-run §3 and §4 on the fixes. Trivial one-liners (a rename, a typo) you may apply directly.
 
 **Exactly one fix pass runs, and it carries Critical and Important findings only.** Minors
