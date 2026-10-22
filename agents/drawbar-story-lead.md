@@ -161,6 +161,9 @@ accordingly" rather than "X is true, do Y."
 Dispatch the **`story-implementer`** agent, with `model: "sonnet"` named explicitly, to build the story test-first. Hand it
 the acceptance criteria, every `Locked` / `MUST-CHECK:` verbatim, and `$KB`. Require it to
 show the RED run, and tell it not to commit, push, open a pull request, or run reviews.
+Put the line `Lessons: report` in every implementer brief, fix-pass briefs included: this is a
+ship run, so the implementer returns its lessons in its report and never appends to the store itself.
+When its report lists lessons, copy them into your report's `lessons` array.
 
 The brief also carries a **`## Read set`** — one line per read, naming what it established and
 what it did not. Your own conclusions about the code go there as evidence naming file and symbol,

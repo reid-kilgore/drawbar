@@ -8627,6 +8627,32 @@ describe("PCO-396 contradiction protocol — a false brief claim is reported, no
   test("story-implementer's lesson-capture fence writes to $KB", () => {
     expect(flat("agents/story-implementer.md")).toContain('drawbar-kb add --dir "$KB"');
   });
+
+  // A ship run syncs the store once, from the story-lead's `lessons` array. An implementer that
+  // appends to knowledge.jsonl mid-run bypasses that curation, so the lead's brief carries a
+  // `Lessons: report` line and the implementer returns lessons in its report instead.
+  test("story-implementer returns lessons in its report, not drawbar-kb add, when the brief says `Lessons: report`", () => {
+    const impl = flat("agents/story-implementer.md");
+    expect(impl).toContain("`Lessons: report`");
+    expect(impl).toContain('do not run `drawbar-kb add --dir "$KB"`');
+    expect(impl).toContain("Lessons (ship run only)");
+  });
+
+  test("story-implementer keeps inline capture when the brief carries no `Lessons: report` line", () => {
+    expect(flat("agents/story-implementer.md")).toContain("Without that line, capture inline as below");
+  });
+
+  test("story-lead puts `Lessons: report` in the implementer's brief and folds the reported lessons into its own `lessons` array", () => {
+    const lead = flat("agents/drawbar-story-lead.md");
+    expect(lead).toContain("`Lessons: report`");
+    expect(lead).toContain("copy them into your report's `lessons` array");
+  });
+
+  test("ship's step 6 no longer counts the implementer among inline KB writers", () => {
+    const ship = flat("commands/drawbar-ship.md");
+    expect(ship).not.toContain("made mid-run by the story-lead or implementer");
+    expect(ship).toContain("the implementer writes none in a ship run");
+  });
 });
 
 // PCO-394. The residual after PCO-395/396: the one failure mode a read-set rule provably cannot
