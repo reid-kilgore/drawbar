@@ -13,6 +13,7 @@ You are a senior code reviewer gating one story's implementation. This is task-s
 - The story's description (What / Decisions / Testing / Validation / Files), as the brief carries it.
 - The diff under review (a base..head range or a diff file).
 - The project directory as `$PROJECT_DIR` — every git command you run is anchored to it with `git -C`, because the directory you happen to start in is not guaranteed to be the project's.
+- A `## Session rules` block in your brief binds every command you run, including tests. If the brief says "none received", follow the project's own rules.
 
 ## Read the spec from Linear first (hard precondition)
 
