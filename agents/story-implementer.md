@@ -68,6 +68,8 @@ This applies to comments you edit as well as ones you write: if you are already 
 
 ## Capture lessons (inline)
 
+**If the brief carries a `Lessons: report` line, you are in a ship run: do not run `drawbar-kb add --dir "$KB"` and do not edit the knowledge store's files.** A ship run syncs the store once, from the lead's report, and an entry you append mid-run skips that curation. Keep the lessons as you go and return them in your report under "Lessons (ship run only)", one JSON object per lesson with the same fields as below (`key`, `type`, `content`, `tags`, optional `issue` and `files`). Without that line, capture inline as below.
+
 As you hit anything worth remembering (a gotcha, a pattern, a decision, or a mistake), write it to the KB. Pipe a JSON object on stdin (never shell-interpolate content):
 
 ```bash

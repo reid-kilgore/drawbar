@@ -1090,7 +1090,7 @@ does.
 
 ## 6. Capture and sync knowledge
 
-Inline KB writes made mid-run by the story-lead or implementer (`drawbar-kb add`) are **not**
+Inline KB writes made mid-run by the story-lead (`drawbar-kb add`; the implementer writes none in a ship run, it returns its lessons in its report) are **not**
 waited for or batched here — they are already on disk by the time this step runs. This step
 commits whatever is on disk (inline writes included) plus the report's own `lessons[]`,
 tolerantly retries against a concurrent push, and halts loud on genuine exhaustion rather than
