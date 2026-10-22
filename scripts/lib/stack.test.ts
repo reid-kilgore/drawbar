@@ -491,10 +491,15 @@ describe("parseCliArgs — flag type enforcement in both directions, per subcomm
     expect(result.ok).toBe(false);
   });
 
-  // `resolve-base` makes no git call at all — `--project-dir` would do nothing there, so it
-  // is refused outright rather than silently accepted-but-ignored.
-  test("resolve-base carrying an unexpected --project-dir refuses", () => {
+  // `resolve-base` gained an OPTIONAL --project-dir: with it, branches pushed ahead of their PRs
+  // are discovered; without it the verb stays pure. A flag with no value is still refused.
+  test("resolve-base accepts an optional --project-dir", () => {
     const result = parseCliArgs("resolve-base", ["--state", "/tmp/run.json", "--story", "story-a", "--project-dir", "/tmp/proj"]);
+    expect(result).toEqual({ ok: true, state: "/tmp/run.json", story: "story-a", projectDir: "/tmp/proj" });
+  });
+
+  test("resolve-base with a valueless --project-dir refuses", () => {
+    const result = parseCliArgs("resolve-base", ["--state", "/tmp/run.json", "--story", "story-a", "--project-dir"]);
     expect(result.ok).toBe(false);
   });
 
@@ -672,16 +677,19 @@ describe("main() — CLI entry, fully injectable", () => {
     expect(called).toBe(false);
   });
 
-  test("resolve-base: --project-dir is refused as a usage error, with EMPTY stdout", async () => {
+  test("resolve-base: a --project-dir that disagrees with the state's projectDir refuses project_dir_untrusted before any git call", async () => {
     let written = "";
+    let called = false;
     const code = await main(
       happyResolveBaseDeps({
-        argv: ["resolve-base", "--state", "/tmp/run.json", "--story", "story-b", "--project-dir", "/tmp/proj"],
+        argv: ["resolve-base", "--state", "/tmp/run.json", "--story", "story-b", "--project-dir", "/tmp/elsewhere"],
+        git: () => { called = true; return { code: 0, stdout: "", stderr: "" }; },
         writeStdout: (s) => { written += s; },
       }),
     );
     expect(code).toBe(1);
-    expect(written).toBe("");
+    expect(JSON.parse(written).reason).toBe("project_dir_untrusted");
+    expect(called).toBe(false);
   });
 
   // IMPORTANT 3: `stack[i].story` is never ref-shape-checked, only `parseRunState`'s
@@ -1462,5 +1470,153 @@ describe("assertChainIntact — stack[0] is judged against the remote-tracking t
   test("cleanup", () => {
     for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
     expect(true).toBe(true);
+  });
+});
+
+
+// --- resolve-base sees stack members that have a branch but no PR yet ---------------------
+//
+// A long stack can push branches ahead of opening PRs, so `state.stack` (appended only when a
+// PR opens) trails the real chain. Resolving the next story's base from `stack` alone then
+// returns an EARLIER member's branch and silently drops the members in between.
+
+const LONG_SNAPSHOT = ["story-a", "story-b", "story-c", "story-d", "story-e", "story-f", "story-g", "story-h"];
+const LONG_STATE: Pick<RunState, "snapshot" | "stack" | "resolved_config"> = {
+  snapshot: LONG_SNAPSHOT,
+  stack: [STORY_A_ENTRY, STORY_B_ENTRY, STORY_C_ENTRY, 
+    { story: "story-d", branch: "story-d-branch", pr: 4, base: "story-c-branch", flagged: false },
+    { story: "story-e", branch: "story-e-branch", pr: 5, base: "story-d-branch", flagged: false },
+  ],
+  resolved_config: VALID_RESOLVED_CONFIG,
+};
+
+function lookupFrom(table: Record<string, string[]>) {
+  return (story: string) => ({ ok: true as const, branches: table[story] ?? [] });
+}
+
+describe("resolveBase — branch-only predecessors (pushed, no PR yet)", () => {
+  test("members 6 and 7 have branches but no PRs: story 8's base is member 7's branch", () => {
+    const result = resolveBase(LONG_STATE, "story-h", { baseBranch: "trunk" }, lookupFrom({
+      "story-f": ["me/plat-6-story-f"],
+      "story-g": ["me/plat-7-story-g"],
+    }));
+    expect(result).toEqual({ ok: true, base: "me/plat-7-story-g", rule: "previous_story_branch_only" });
+    expect((result as { base: string }).base).not.toBe("story-e-branch");
+  });
+
+  test("the nearest predecessor wins even when an earlier branch-only member also exists", () => {
+    const result = resolveBase(LONG_STATE, "story-g", { baseBranch: "trunk" }, lookupFrom({
+      "story-f": ["me/plat-6-story-f"],
+    }));
+    expect(result).toEqual({ ok: true, base: "me/plat-6-story-f", rule: "previous_story_branch_only" });
+  });
+
+  test("a parked middle member with no branch is skipped; the nearest earlier branch wins", () => {
+    const result = resolveBase(LONG_STATE, "story-h", { baseBranch: "trunk" }, lookupFrom({
+      "story-f": ["me/plat-6-story-f"],
+    }));
+    expect(result).toEqual({ ok: true, base: "me/plat-6-story-f", rule: "previous_story_branch_only" });
+  });
+
+  test("no branch-only member: falls back to the last stack entry, as before", () => {
+    const result = resolveBase(LONG_STATE, "story-f", { baseBranch: "trunk" }, lookupFrom({}));
+    expect(result).toEqual({ ok: true, base: "story-e-branch", rule: "previous_story_branch" });
+  });
+
+  test("a branch for a member already in the stack is ignored (the recorded stack order wins)", () => {
+    const result = resolveBase(LONG_STATE, "story-f", { baseBranch: "trunk" }, lookupFrom({
+      "story-e": ["me/some-other-e-branch"],
+    }));
+    expect(result).toEqual({ ok: true, base: "story-e-branch", rule: "previous_story_branch" });
+  });
+
+  test("two branches for one predecessor refuse ambiguous_predecessor_branch, never a guess", () => {
+    const result = resolveBase(LONG_STATE, "story-g", { baseBranch: "trunk" }, lookupFrom({
+      "story-f": ["me/plat-6-story-f", "me/plat-6-story-f-retry"],
+    }));
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason).toBe("ambiguous_predecessor_branch");
+  });
+
+  test("a lookup failure refuses predecessor_lookup_failed", () => {
+    const result = resolveBase(LONG_STATE, "story-g", { baseBranch: "trunk" }, () => ({ ok: false, detail: "git exploded" }));
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason).toBe("predecessor_lookup_failed");
+  });
+
+  test("a discovered branch with an unsafe shape refuses invalid_predecessor_branch_shape", () => {
+    const result = resolveBase(LONG_STATE, "story-g", { baseBranch: "trunk" }, lookupFrom({ "story-f": ["--upload-pack=evil"] }));
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason).toBe("invalid_predecessor_branch_shape");
+  });
+
+  test("an empty stack with a branch-only first member bases the second on it", () => {
+    const state = { ...BASE_RUN_STATE, stack: [] };
+    const result = resolveBase(state, "story-b", { baseBranch: "trunk" }, lookupFrom({ "story-a": ["me/plat-1-story-a"] }));
+    expect(result).toEqual({ ok: true, base: "me/plat-1-story-a", rule: "previous_story_branch_only" });
+  });
+
+  test("the first story never consults the lookup", () => {
+    const result = resolveBase({ ...BASE_RUN_STATE, stack: [] }, "story-a", { baseBranch: "trunk" }, () => { throw new Error("must not be called"); });
+    expect(result).toEqual({ ok: true, base: "trunk", rule: "config_base" });
+  });
+});
+
+describe("main() — resolve-base --project-dir discovers branch-only members through git (real shape)", () => {
+  function refs(lines: string[]): Runner {
+    return (argv) => {
+      if (argv.includes("for-each-ref")) return { code: 0, stdout: lines.join("\n") + "\n", stderr: "" };
+      return { code: 1, stdout: "", stderr: "unexpected git call" };
+    };
+  }
+  const state: RunState = {
+    ...VALID_RUN_STATE,
+    snapshot: LONG_SNAPSHOT,
+    stack: LONG_STATE.stack,
+  };
+
+  async function run(git: Runner) {
+    let written = "";
+    const code = await main({
+      argv: ["resolve-base", "--state", "/tmp/run.json", "--story", "story-h", "--project-dir", VALID_RESOLVED_CONFIG.projectDir],
+      readState: () => JSON.stringify(state),
+      git,
+      writeStdout: (s) => { written += s; },
+      writeStderr: () => {},
+    });
+    return { code, out: JSON.parse(written) };
+  }
+
+  test("local and origin copies of one branch count once; -evidence branches and id-prefix lookalikes are ignored", async () => {
+    const { code, out } = await run(refs([
+      "me/plat-6-story-f", "origin/me/plat-6-story-f",
+      "me/plat-7-story-g", "origin/me/plat-7-story-g",
+      "me/plat-7-story-g-evidence", "origin/me/plat-7-story-g-evidence",
+      "me/plat-8-story-gg",
+      "origin/HEAD", "origin",
+    ]));
+    expect(code).toBe(0);
+    expect(out).toEqual({ ok: true, base: "me/plat-7-story-g", rule: "previous_story_branch_only" });
+  });
+
+  test("a git failure refuses predecessor_lookup_failed and exits non-zero", async () => {
+    const { code, out } = await run(() => ({ code: 128, stdout: "", stderr: "fatal: not a git repository" }));
+    expect(code).toBe(1);
+    expect(out.reason).toBe("predecessor_lookup_failed");
+  });
+
+  test("without --project-dir, no git call is made and the old stack-only answer stands", async () => {
+    let called = false;
+    let written = "";
+    const code = await main({
+      argv: ["resolve-base", "--state", "/tmp/run.json", "--story", "story-h"],
+      readState: () => JSON.stringify(state),
+      git: () => { called = true; return { code: 0, stdout: "", stderr: "" }; },
+      writeStdout: (s) => { written += s; },
+      writeStderr: () => {},
+    });
+    expect(code).toBe(0);
+    expect(called).toBe(false);
+    expect(JSON.parse(written).base).toBe("story-e-branch");
   });
 });

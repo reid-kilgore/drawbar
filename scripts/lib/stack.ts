@@ -11,7 +11,10 @@
 //   - `resolveBase` — the branch a NEW story should be based on: the run's configured
 //     `baseBranch` if `state.stack` is empty (this is the first story), otherwise the
 //     LAST-appended stack entry's `branch` (Locked A — never the configured base, for any
-//     story after the first). Pure; touches no git at all.
+//     story after the first). Pure; touches no git at all. Given an injected `BranchLookup` (the CLI's
+//     `--project-dir`), it also sees members that have a branch but no PR yet: the nearest such
+//     predecessor past the end of `stack` in snapshot order is the base, because `stack` is only
+//     appended when a PR opens and a long stack can push branches ahead of its PRs.
 //   - `assertChainIntact` — re-verifies a resumed run's recorded stack against the actual
 //     repository: each entry's `base` must still match Locked A's own rule (pure, no git),
 //     and each entry's `branch`/`base` must still exist and the chain must still hold
@@ -54,9 +57,15 @@ export type ResolveBaseReason =
   | "story_already_stacked"
   | "base_branch_config_drift"
   | "invalid_base_branch_shape"
-  | "invalid_predecessor_branch_shape";
+  | "invalid_predecessor_branch_shape"
+  | "ambiguous_predecessor_branch"
+  | "predecessor_lookup_failed";
 
-export type ResolveBaseRule = "config_base" | "previous_story_branch";
+export type ResolveBaseRule = "config_base" | "previous_story_branch" | "previous_story_branch_only";
+
+// Finds the branch(es) a story has in the repository, for a story with no stack entry. Injected
+// so `resolveBase` stays pure: the CLI supplies a git-backed one only when given `--project-dir`.
+export type BranchLookup = (storyId: string) => { ok: true; branches: string[] } | { ok: false; detail: string };
 
 export type ResolveBaseResult =
   | { ok: true; base: string; rule: ResolveBaseRule }
@@ -70,6 +79,7 @@ export function resolveBase(
   runState: Pick<RunState, "snapshot" | "stack" | "resolved_config">,
   storyId: string,
   config: Pick<ShipConfig, "baseBranch">,
+  lookupBranches?: BranchLookup,
 ): ResolveBaseResult {
   if (!isNonEmptyTrimmed(storyId)) {
     return { ok: false, reason: "invalid_story_id", detail: "storyId must be a non-empty trimmed string" };
@@ -97,6 +107,32 @@ export function resolveBase(
   }
   if (!isValidRefName(config.baseBranch)) {
     return { ok: false, reason: "invalid_base_branch_shape", detail: config.baseBranch };
+  }
+  // Branch-only members: `stack` is appended when a PR opens, so a stack that pushes branches
+  // ahead of its PRs has members that exist only as branches. Those sit AFTER the last stacked
+  // story in snapshot order; the nearest one below this story is the true parent. The recorded
+  // stack order still wins for everything it covers — only the gap past its end is searched.
+  if (lookupBranches !== undefined) {
+    const own = runState.snapshot.indexOf(storyId);
+    const lastStacked = runState.stack.length === 0
+      ? -1
+      : runState.snapshot.lastIndexOf(runState.stack[runState.stack.length - 1]!.story);
+    for (let j = own - 1; j > lastStacked; j--) {
+      const found = lookupBranches(runState.snapshot[j]!);
+      if (!found.ok) return { ok: false, reason: "predecessor_lookup_failed", detail: found.detail };
+      if (found.branches.length > 1) {
+        return {
+          ok: false,
+          reason: "ambiguous_predecessor_branch",
+          detail: `${runState.snapshot[j]} matches ${found.branches.length} branches: ${found.branches.join(", ")}`,
+        };
+      }
+      if (found.branches.length === 1) {
+        const branch = found.branches[0]!;
+        if (!isValidRefName(branch)) return { ok: false, reason: "invalid_predecessor_branch_shape", detail: branch };
+        return { ok: true, base: branch, rule: "previous_story_branch_only" };
+      }
+    }
   }
   const base = baseForNextStory(runState);
   if (runState.stack.length === 0) {
@@ -535,6 +571,28 @@ function sanitizeChainOrBaseDetail<R extends { ok: true } | { ok: false; reason:
   return { ...result, detail: sanitizeForOutput(result.detail) };
 }
 
+// Git-backed `BranchLookup`: a story's branches are the local and origin branches whose name
+// carries the story id as a whole token (so `plat-7` never matches `plat-70`), case-insensitively.
+// A local branch and its origin copy count once, and `<branch>-evidence` screenshot branches
+// never count. Reads refs only.
+export function makeGitBranchLookup(projectDir: string, git: Runner): BranchLookup {
+  let names: string[] | undefined;
+  return (storyId) => {
+    if (names === undefined) {
+      const r = git(["-C", projectDir, "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes/origin"]);
+      if (r.code !== 0) return { ok: false, detail: `git for-each-ref exited ${r.code}` };
+      names = [...new Set(
+        r.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "")
+          .map((l) => (l.startsWith("origin/") ? l.slice("origin/".length) : l))
+          .filter((l) => l !== "HEAD" && l !== "origin" && !l.endsWith("-evidence")),
+      )];
+    }
+    const escaped = storyId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const token = new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, "i");
+    return { ok: true, branches: names.filter((n) => token.test(n)) };
+  };
+}
+
 // --- CLI entry point --------------------------------------------------------------------
 //
 // `bun run stack.ts resolve-base --state <path> --story <id>`
@@ -557,9 +615,9 @@ function sanitizeChainOrBaseDetail<R extends { ok: true } | { ok: false; reason:
 // operator-authored trust root instead (R3's runbook sources it from
 // `ship-config.ts validate`'s own resolved output, never from the state file); the flag value
 // and the state's copy must AGREE (compared via `resolve()`) before any git call, or the run
-// refuses `project_dir_untrusted` with the git runner never invoked. `resolve-base` makes no
-// git call at all, so `--project-dir` is forbidden there — accepting-but-ignoring it would
-// invite a caller to believe it does something.
+// refuses `project_dir_untrusted` with the git runner never invoked. `resolve-base` takes
+// `--project-dir` OPTIONALLY: given it (same trust check), it also finds stack members that have a
+// branch but no PR yet; omitted, it makes no git call at all.
 
 export type CliParse =
   | { ok: true; state: string; story?: string; projectDir?: string; branch?: string }
@@ -571,7 +629,7 @@ export type StackCommand = "resolve-base" | "assert-chain" | "plan-cleanup";
 // `parseCliArgs`): a flag with no consumable value binds boolean `true`, refused rather than
 // silently treated as absent; an empty-string value is refused; a repeated or unknown flag
 // refuses outright. `--story` is required for `resolve-base` and forbidden for `assert-chain`;
-// `--project-dir` is required for `assert-chain` and forbidden for `resolve-base` — the two
+// `--project-dir` is required for `assert-chain` and optional for `resolve-base` — the
 // subcommands' contracts differ, so this is checked per-`cmd`, not generically.
 export function parseCliArgs(cmd: StackCommand, args: string[]): CliParse {
   let seenState = false;
@@ -657,12 +715,14 @@ export function parseCliArgs(cmd: StackCommand, args: string[]): CliParse {
     if (projectDir === undefined) return { ok: false, error: "--project-dir is required" };
     return { ok: true, state, projectDir };
   }
-  // cmd === "resolve-base"
-  if (projectDir !== undefined) return { ok: false, error: "--project-dir is not valid for resolve-base" };
+  // cmd === "resolve-base": --project-dir is OPTIONAL. With it, branches pushed ahead of their PRs
+  // are discovered through git; without it the verb stays pure and sees the stack alone.
+  if (projectDir === true) return { ok: false, error: "--project-dir requires a value" };
+  if (projectDir === "") return { ok: false, error: "--project-dir value must not be empty" };
   if (story === true) return { ok: false, error: "--story requires a value" };
   if (story === "") return { ok: false, error: "--story value must not be empty" };
   if (story === undefined) return { ok: false, error: "--story is required" };
-  return { ok: true, state, story };
+  return projectDir === undefined ? { ok: true, state, story } : { ok: true, state, story, projectDir };
 }
 
 function makeRealRunner(bin: string): Runner {
@@ -703,7 +763,7 @@ export async function main(deps: MainDeps = {}): Promise<number> {
   const [cmd, ...rest] = argv;
   if (cmd !== "resolve-base" && cmd !== "assert-chain" && cmd !== "plan-cleanup") {
     writeStderr(
-      "usage: stack.ts resolve-base --state <path> --story <id>" +
+      "usage: stack.ts resolve-base --state <path> --story <id> [--project-dir <dir>]" +
         " | assert-chain --state <path> --project-dir <dir>" +
         " | plan-cleanup --state <path> --project-dir <dir> --branch <name>\n",
     );
@@ -730,14 +790,14 @@ export async function main(deps: MainDeps = {}): Promise<number> {
     return 1;
   }
 
-  if (cmd === "resolve-base") {
+  if (cmd === "resolve-base" && parsedArgs.projectDir === undefined) {
     const result = resolveBase(parsedState.state, parsedArgs.story!, { baseBranch: parsedState.state.resolved_config.baseBranch });
     writeStdout(JSON.stringify(sanitizeChainOrBaseDetail(result)) + "\n");
     return result.ok ? 0 : 1;
   }
 
-  // Both remaining subcommands take git calls, so both go through CRITICAL 3's trust-root check
-  // — one implementation site, shared, rather than a second copy for the newer verb.
+  // Every subcommand that takes git calls goes through CRITICAL 3's trust-root check — one
+  // implementation site, shared (resolve-base only when given --project-dir).
   //
   // CRITICAL 3: `--project-dir` (operator-supplied, required) is the trust root; the state
   // file's own `resolved_config.projectDir` copy is agent-writable and is never itself passed to
@@ -757,6 +817,17 @@ export async function main(deps: MainDeps = {}): Promise<number> {
     };
     writeStdout(JSON.stringify(sanitizeChainOrBaseDetail(result)) + "\n");
     return 1;
+  }
+
+  if (cmd === "resolve-base") {
+    const result = resolveBase(
+      parsedState.state,
+      parsedArgs.story!,
+      { baseBranch: parsedState.state.resolved_config.baseBranch },
+      makeGitBranchLookup(projectDirFlag, git),
+    );
+    writeStdout(JSON.stringify(sanitizeChainOrBaseDetail(result)) + "\n");
+    return result.ok ? 0 : 1;
   }
 
   if (cmd === "plan-cleanup") {
