@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { readFileSync, mkdtempSync, readdirSync, writeFileSync, existsSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { readFileSync, mkdtempSync, readdirSync, writeFileSync, existsSync, mkdirSync, symlinkSync, rmSync, realpathSync, statSync, readFileSync as readSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -2807,10 +2807,16 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
   // directory per story. With a fixed path, staleness is the new failure mode — story N+1 opening
   // a PR with story N's title because one Write was skipped — so the four files are removed
   // however the block ends, and the gate above then refuses the next story outright.
-  test("CRITICAL 2: the shipped EXIT trap removes all four inputs on both the success and the refusal path", async () => {
+  test("CRITICAL 2: the shipped EXIT trap truncates all four inputs on both the success and the refusal path", async () => {
     const c = code();
     const trapLine = oneLine(c, "trap ", "§4's inputs cleanup trap");
-    expect(trapLine).toBe(`trap 'rm -f "$INPUTS" "$BRANCH_FILE" "$PR_TITLE_FILE" "$PR_BODY_FILE"' EXIT`);
+    // Truncation, not `rm`: a Claude Code safety check refused the `rm -f` cleanup (reported by the sperf ship session).
+    // A zero-byte input is refused by the file gate, so a truncated file is never reusable. Each
+    // leaf is skipped when it is a symlink, because `: >` follows one and `rm -f` did not.
+    expect(trapLine).toBe(
+      `trap 'for f in "$INPUTS" "$BRANCH_FILE" "$PR_TITLE_FILE" "$PR_BODY_FILE"; do [ -f "$f" ] && [ ! -L "$f" ] && : > "$f"; done' EXIT`,
+    );
+    expect(trapLine).not.toContain("rm ");
     // It is armed BEFORE the gate that can exit, or a refusal leaves the inputs behind for the
     // next story to inherit. Compared by LINE index over the fence, not by `indexOf("trap ")` over
     // its text: the comment above the trap explains it by name, so a substring search finds the
@@ -2825,16 +2831,38 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
       oneLine(c, `${n}=`, `§4's ${n} path`),
     );
     const gate = markedBlock("# --- inputs file gate", "# --- end inputs file gate");
+    // "Survivor" = an input that still holds bytes, i.e. one the file gate would accept as fresh.
     async function survivors(tail: string, missing?: string): Promise<string[]> {
       const { cwd, dir } = shipTree();
       if (missing) rmSync(join(dir, missing));
       await runScript(gateScript(cwd, [...paths, trapLine, gate, tail]));
-      return INPUT_LEAVES.filter((leaf) => existsSync(join(dir, leaf)));
+      return INPUT_LEAVES.filter((leaf) => existsSync(join(dir, leaf)) && statSync(join(dir, leaf)).size > 0);
     }
     expect(await survivors("exit 0"), "an input survived the success path").toEqual([]);
     // The refusal path: `title` was never written, the gate exits 1, and the three that WERE
     // written must still be swept — otherwise the next story inherits them.
     expect(await survivors("exit 0", "title"), "an input survived the gate's refusal").toEqual([]);
+    // The skipped leaf is not created either: a missing input stays missing.
+    {
+      const { cwd, dir } = shipTree();
+      rmSync(join(dir, "title"));
+      await runScript(gateScript(cwd, [...paths, trapLine, "exit 0"]));
+      expect(existsSync(join(dir, "title")), "the trap created a missing input").toBe(false);
+    }
+    // A symlinked LEAF: `: >` would follow it and truncate the target, where the old `rm -f` only
+    // removed the link. The target must be byte-for-byte untouched and the other three truncated.
+    {
+      const { cwd, dir } = shipTree();
+      const target = join(cwd, "operator-file");
+      writeFileSync(target, "operator's own file\n");
+      rmSync(join(dir, "body"));
+      symlinkSync(target, join(dir, "body"));
+      await runScript(gateScript(cwd, [...paths, trapLine, "exit 0"]));
+      expect(readSync(target, "utf8"), "the trap truncated a symlinked leaf's target").toBe("operator's own file\n");
+      for (const leaf of ["inputs.json", "branch", "title"] as const) {
+        expect(statSync(join(dir, leaf)).size, `${leaf} was not truncated`).toBe(0);
+      }
+    }
   });
 
   // CRITICAL: JSON KEY injection, re-derived. `branch` used to be pasted between two `"` inside a
@@ -7836,9 +7864,9 @@ function bashFences(relPath: string): string[] {
 // deterministic path is safe, the reason `branch` is read from its own file, and the reason both
 // $CONFIG guards run again all live here and nowhere else in the fence.
 const SH4_FENCE_COMMENTS: readonly string[] = [
-    "NOTHING in this fence is substituted, and it authors none of the four files it reads. The four values that come out of the repository under review — the inputs document, the branch name, the PR title, the PR body — were written by the agent with the Write tool before this block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so untrusted text is never parsed by a shell at all. The four QUOTED heredocs that used to carry them are gone for good: a substituted line equal to a heredoc terminator closes it early and the rest is parsed as shell, and those terminators are fixed literals published in this public repository. Do not reintroduce a heredoc, a here-string, or any other fill-in slot here. The path is DETERMINISTIC rather than `mktemp -d`, because the agent has to know where to write before this block runs; Preflight prints it, so it is never guessed. That gives up everything `mktemp -d` provided for free, and each half is bought back explicitly below. Unguessability is replaced by the directory gate: this path is entirely predictable, so a branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths cannot see a symlinked component above them — the agent's writes and this block's `rm -f` would both follow it and truncate, then unlink, four arbitrary files under the operator's identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself. Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT trap removes all four however this block ends, so a run that REACHES it leaves nothing behind; but a run that dies before it — session killed, agent errored, story parked in an earlier section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one. Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would otherwise open a PR with no review provenance and no `## Unresolved findings` section at all. What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary regular files at these names, and they would satisfy every other check on the very first run, so a tracked input is refused exactly as a tracked `$CONFIG` is.",
+    "NOTHING in this fence is substituted, and it authors none of the four files it reads. The four values that come out of the repository under review — the inputs document, the branch name, the PR title, the PR body — were written by the agent with the Write tool before this block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so untrusted text is never parsed by a shell at all. The four QUOTED heredocs that used to carry them are gone for good: a substituted line equal to a heredoc terminator closes it early and the rest is parsed as shell, and those terminators are fixed literals published in this public repository. Do not reintroduce a heredoc, a here-string, or any other fill-in slot here. The path is DETERMINISTIC rather than `mktemp -d`, because the agent has to know where to write before this block runs; Preflight prints it, so it is never guessed. That gives up everything `mktemp -d` provided for free, and each half is bought back explicitly below. Unguessability is replaced by the directory gate: this path is entirely predictable, so a branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths cannot see a symlinked component above them — the agent's writes and this block's cleanup would both follow it and truncate four arbitrary files under the operator's identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself. Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT trap truncates all four to zero bytes however this block ends, so a run that REACHES it leaves nothing reusable behind: the file gate below refuses a zero-byte file. It truncates rather than deletes, and it skips a leaf that is a symlink: `: >` follows a symlinked leaf and would truncate its target, where `rm -f` only ever removed the link; but a run that dies before it — session killed, agent errored, story parked in an earlier section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one. Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would otherwise open a PR with no review provenance and no `## Unresolved findings` section at all. What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary regular files at these names, and they would satisfy every other check on the very first run, so a tracked input is refused exactly as a tracked `$CONFIG` is.",
     "--- inputs directory gate ----------------------------------------------------------------",
-    "BEFORE the trap is armed: `rm -f` follows a symlinked path component exactly as the agent's writes do, so a redirected $IN_DIR has to be refused while there is still nothing armed to delete through it. Both sides are symlink-resolved, so an operator whose checkout is reached through a symlink is not refused, while a symlink at any component under it is.",
+    "BEFORE the trap is armed: the trap's `: >` follows a symlinked path component exactly as the agent's writes do, so a redirected $IN_DIR has to be refused while there is still nothing armed to truncate through it. Both sides are symlink-resolved, so an operator whose checkout is reached through a symlink is not refused, while a symlink at any component under it is.",
     "--- end inputs directory gate --------------------------------------------------------------",
     "--- inputs file gate -------------------------------------------------------------------------",
     "--- end inputs file gate ---------------------------------------------------------------------",
