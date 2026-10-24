@@ -804,11 +804,14 @@ heredoc that carries substituted text reopens the vector in full.
 # Unguessability is replaced by the directory gate: this path is entirely predictable, so a
 # branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY
 # SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths
-# cannot see a symlinked component above them — the agent's writes and this block's `rm -f`
-# would both follow it and truncate, then unlink, four arbitrary files under the operator's
+# cannot see a symlinked component above them — the agent's writes and this block's cleanup
+# would both follow it and truncate four arbitrary files under the operator's
 # identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself.
 # Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT
-# trap removes all four however this block ends, so a run that REACHES it leaves nothing behind;
+# trap truncates all four to zero bytes however this block ends, so a run that REACHES it leaves
+# nothing reusable behind: the file gate below refuses a zero-byte file. It truncates rather than
+# deletes, and it skips a leaf that is a symlink: `: >` follows a symlinked leaf and would
+# truncate its target, where `rm -f` only ever removed the link;
 # but a run that dies before it — session killed, agent errored, story parked in an earlier
 # section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one.
 # Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can
@@ -820,9 +823,9 @@ heredoc that carries substituted text reopens the vector in full.
 IN_DIR="$PWD/.drawbar/tmp/ship"
 
 # --- inputs directory gate ----------------------------------------------------------------
-# BEFORE the trap is armed: `rm -f` follows a symlinked path component exactly as the agent's
-# writes do, so a redirected $IN_DIR has to be refused while there is still nothing armed to
-# delete through it. Both sides are symlink-resolved, so an operator whose checkout is reached
+# BEFORE the trap is armed: the trap's `: >` follows a symlinked path component exactly as the
+# agent's writes do, so a redirected $IN_DIR has to be refused while there is still nothing armed
+# to truncate through it. Both sides are symlink-resolved, so an operator whose checkout is reached
 # through a symlink is not refused, while a symlink at any component under it is.
 PWD_REAL=$(readlink -f "$PWD") || { echo "FATAL: cannot resolve the working directory to a real path — refusing."; exit 1; }
 IN_REAL=$(readlink -f "$IN_DIR") || { echo "FATAL: cannot resolve $IN_DIR to a real path — write all four inputs with the Write tool first; refusing."; exit 1; }
@@ -834,7 +837,7 @@ INPUTS="${IN_DIR}/inputs.json"
 BRANCH_FILE="${IN_DIR}/branch"
 PR_TITLE_FILE="${IN_DIR}/title"
 PR_BODY_FILE="${IN_DIR}/body"
-trap 'rm -f "$INPUTS" "$BRANCH_FILE" "$PR_TITLE_FILE" "$PR_BODY_FILE"' EXIT
+trap 'for f in "$INPUTS" "$BRANCH_FILE" "$PR_TITLE_FILE" "$PR_BODY_FILE"; do [ -f "$f" ] && [ ! -L "$f" ] && : > "$f"; done' EXIT
 
 # --- inputs file gate -------------------------------------------------------------------------
 for f in "$INPUTS" "$BRANCH_FILE" "$PR_TITLE_FILE" "$PR_BODY_FILE"; do
