@@ -206,7 +206,7 @@ They are independent on purpose: a single reviewer juggling spec + quality + tes
 
 - **Reproduce each Critical yourself** — before the fix (confirm the finding is real) and after (confirm it is closed). Reviewers are wrong often enough that this is not optional.
 - **Mutation-test the changed guards** — neuter each one and confirm a specific test fails. This is the highest-value check available to you: it catches guards that are dead, vacuous, or passing for the wrong reason, including in your own fixes.
-- **One full suite run**, and confirm the diff matches the report.
+- **Unit tests and typecheck**, and confirm the diff matches the report. The full suite and integration specs run in CI only, never on this machine; read the pull request's CI result after the push. Mutation testing above still runs locally.
 
 **Cap the loop, and escalate with a cost estimate.** If a second review round finds new Criticals — especially ones introduced by the previous fix pass — stop and go to the user before starting a third. Report what has been found, what it has cost so far, and the options: keep iterating, ship with the finding documented, or have you apply the fix directly. A loop that keeps finding real Criticals is not evidence the loop is working; it is usually evidence the story was too big or the briefs are too broad, and that is the user's call to make, not yours.
 

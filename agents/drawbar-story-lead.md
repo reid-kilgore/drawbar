@@ -213,6 +213,13 @@ Read the report *and* the diff. Confirm the RED runs were shown, not claimed. Re
 covering tests plus typecheck and lint yourself. Check every acceptance criterion and every
 `Locked` decision. Send it back with specific gaps if anything is unverified.
 
+**Full suites and integration specs run in CI only (Reid, 2026-10-27).** You verify with unit tests,
+typecheck and lint, plus the mutation gate below, and then read CI on the pushed branch. Do not run
+the whole suite, do not run an integration spec, and do not create a per-story database for one,
+and copy that sentence into the `## Session rules` block of every brief you write. If a
+source-guard spec below is an integration spec, leave it to CI. If a spec cannot be shown by
+unit tests, say so in your report so the reader knows CI is the first place it runs.
+
 **Collect any brief claims the implementer reported false, and carry them into `false_claims` in
 §7.** They are about *your* brief, so the temptation is to fix the wording and move on — don't:
 unreported, the same claim goes into the next brief and into the knowledge base. Where one changes

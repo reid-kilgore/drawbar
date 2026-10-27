@@ -42,7 +42,7 @@ Work in red→green increments. **The RED run is mandatory and must be shown in 
 
 Repeat until every acceptance criterion is met. Honor every Locked decision and `MUST-CHECK:` — if one blocks the story as written, stop and say so in your report rather than working around it.
 
-**Test scope — defer to the project, don't over-run.** Read the project's `CLAUDE.md` for its test-cost guidance. By default run only the **tests covering your change** (the targeted file or unit scope) plus **typecheck and lint**. Do not run the full suite locally unless the project says to — rely on pre-push hooks and CI for integration coverage.
+**Test scope — unit tests locally, full suites and integration specs in CI only.** Read the project's `CLAUDE.md` for its test-cost guidance. Run only the **unit tests covering your change** (the targeted file, name or `--changed`) plus **typecheck and lint**. Never run the full suite and never run an integration spec locally, and do not create a database for one: CI runs both on every pull request (Reid, 2026-10-27, after whole-suite runs drove a laptop to a load of 105). A behavior only an integration spec can show gets a unit test of the logic you can reach, and the integration coverage comes from CI after the push. A project guard may refuse these runs; the override is `ALLOW_FULL_SUITE=1`, and you use it only when the lead's brief names the exact command.
 
 **Do not:** open or push a PR, run `git commit` unless the lead told you to, change Linear status, or dispatch reviewers. You hand the working tree back for verification.
 
