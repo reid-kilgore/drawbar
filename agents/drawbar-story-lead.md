@@ -217,7 +217,10 @@ covering tests plus typecheck and lint yourself. Check every acceptance criterio
 typecheck and lint, plus the mutation gate below, and then read CI on the pushed branch. Do not run
 the whole suite, do not run an integration spec, and do not create a per-story database for one,
 and copy that sentence into the `## Session rules` block of every brief you write. If a
-source-guard spec below is an integration spec, leave it to CI. If a spec cannot be shown by
+source-guard spec below is an integration spec, leave it to CI. If the project's `CLAUDE.md` or
+your Session rules name a serial wrapper for a heavy typecheck (for example `serial-typecheck-tests`
+for the hourly `typecheck:tests`, which runs one copy at a time per laptop), run that wrapper, never
+the direct command, and never put `timeout` in front of the direct command. If a spec cannot be shown by
 unit tests, say so in your report so the reader knows CI is the first place it runs.
 
 **Collect any brief claims the implementer reported false, and carry them into `false_claims` in
