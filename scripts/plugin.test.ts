@@ -7214,7 +7214,7 @@ const WK6_FULL: readonly string[] = [
     "- **Mutation-test the changed guards** — neuter each one and confirm a specific test " +
       "fails. This is the highest-value check available to you: it catches guards that are " +
       "dead, vacuous, or passing for the wrong reason, including in your own fixes.",
-    "- **One full suite run**, and confirm the diff matches the report.",
+    "- **Unit tests and typecheck**, and confirm the diff matches the report. The full suite and integration specs run in CI only, never on this machine; read the pull request's CI result after the push. Mutation testing above still runs locally.",
     "**Cap the loop, and escalate with a cost estimate.** If a second review round finds new " +
       "Criticals — especially ones introduced by the previous fix pass — stop and go to the " +
       "user before starting a third. Report what has been found, what it has cost so far, and " +
