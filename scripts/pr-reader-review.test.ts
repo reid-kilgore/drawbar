@@ -19,16 +19,16 @@ function setup(opts: { title?: string; body?: string; rc?: number; noTool?: bool
   mkdirSync(bin);
   if (!opts.noTool) {
     // The fake records the file it was given, so the test can check the exact text it reviewed.
-    writeFileSync(join(bin, "reader-review"), `#!/bin/bash\ncp "$1" "${cwd}/seen"\necho "$2 $3" > "${cwd}/args"\nexit ${opts.rc ?? 0}\n`);
+    writeFileSync(join(bin, "reader-review"), `#!/bin/bash\ncp "$1" "${cwd}/seen"\necho "$2 $3" > "${cwd}/args"\necho "$*" > "${cwd}/allargs"\nexit ${opts.rc ?? 0}\n`);
     chmodSync(join(bin, "reader-review"), 0o755);
   }
   return { cwd, dir, bin };
 }
 
-async function run(cwd: string, bin: string) {
-  const proc = Bun.spawn(["bash", SCRIPT], {
+async function run(cwd: string, bin: string, opts: { arg?: string; env?: Record<string, string> } = {}) {
+  const proc = Bun.spawn(["bash", SCRIPT, ...(opts.arg ? [opts.arg] : [])], {
     cwd,
-    env: { PATH: `${bin}:/usr/bin:/bin` },
+    env: { PATH: `${bin}:/usr/bin:/bin`, ...(opts.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -97,5 +97,41 @@ describe("pr-reader-review.sh", () => {
     const { cwd, dir, bin } = setup({});
     await run(cwd, bin);
     expect(readFileSync(join(dir, "pr-text"), "utf8")).toBe("");
+  });
+
+  test("a glossary given as an argument is passed to the reviewer as --glossary", async () => {
+    const { cwd, bin } = setup({});
+    const g = join(cwd, "glossary.md");
+    writeFileSync(g, "# Glossary\n");
+    const { code } = await run(cwd, bin, { arg: g });
+    expect(code).toBe(0);
+    expect(readFileSync(join(cwd, "allargs"), "utf8").trim()).toEndWith(`--kind pr --glossary ${g}`);
+  });
+
+  test("DRAWBAR_READER_GLOSSARY is used when no argument is given, and the argument wins when both are set", async () => {
+    const { cwd, bin } = setup({});
+    const a = join(cwd, "a.md");
+    const b = join(cwd, "b.md");
+    writeFileSync(a, "a");
+    writeFileSync(b, "b");
+    await run(cwd, bin, { env: { DRAWBAR_READER_GLOSSARY: a } });
+    expect(readFileSync(join(cwd, "allargs"), "utf8")).toContain(`--glossary ${a}`);
+    await run(cwd, bin, { arg: b, env: { DRAWBAR_READER_GLOSSARY: a } });
+    expect(readFileSync(join(cwd, "allargs"), "utf8")).toContain(`--glossary ${b}`);
+  });
+
+  test("with no glossary set the reviewer runs as before, with no --glossary", async () => {
+    const { cwd, bin } = setup({});
+    await run(cwd, bin);
+    expect(readFileSync(join(cwd, "allargs"), "utf8")).not.toContain("--glossary");
+  });
+
+  test("a glossary path that is set but missing is a refusal before any review, never a silent skip", async () => {
+    const { cwd, bin } = setup({});
+    const { code, out } = await run(cwd, bin, { arg: join(cwd, "nope.md") });
+    expect(code).toBe(1);
+    expect(out).toContain("READER_FAIL");
+    expect(out).toContain("glossary");
+    expect(() => readFileSync(join(cwd, "seen"))).toThrow();
   });
 });
