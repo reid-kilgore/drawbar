@@ -1754,9 +1754,9 @@ describe("PCO-366 R3: ship §4/§5 — open the stacked PR, leave In Progress, p
     );
   });
 
-  test("§4's flagged-PR-body pin: an Unresolved findings section, built before gh pr create runs, never appended after", () => {
+  test("§4's flagged-PR-body pin: a Problems the reviewers found and did not fix section, built before gh pr create runs, never appended after", () => {
     expect(s4()).toContain(
-      "the PR body carries an `## Unresolved findings` section, built before `gh pr create` " +
+      "the PR body carries an `## Problems the reviewers found and did not fix` section, built before `gh pr create` " +
         "runs, never appended after",
     );
   });
@@ -1770,9 +1770,9 @@ describe("PCO-366 R3: ship §4/§5 — open the stacked PR, leave In Progress, p
   // finding". §3 now files a sub-issue for every surviving `findings[]` entry too, which is
   // what makes an id available to render — without that, this rule was unsatisfiable for the
   // very entries a `flagged` story is flagged FOR.
-  test("§4 restricts '## Unresolved findings' to sub-issue ids and titles only, never the finding body/file:line/quoted source", () => {
+  test("§4 restricts '## Problems the reviewers found and did not fix' to sub-issue ids and titles only, never the finding body/file:line/quoted source", () => {
     expect(s4()).toContain(
-      "names each surviving finding by its filed sub-issue id and title only — never the " +
+      "names each surviving finding by its filed sub-issue id and title, plus one plain sentence on what goes wrong for a person — never the " +
         "finding body, `file:line`, a finding's `dedup_key` or any of its `file` / `line` / " +
         "`claim_hash` fields, or a quoted source excerpt",
     );
@@ -1989,7 +1989,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
   // i.e. the instruction the agent filled in. PCO-371 deleted every one of those heredocs, so the
   // instructions moved into §4's prose: the four write targets as a list, and the inputs document
   // as a ```json block. The pin discipline is unchanged and the reason for it is unchanged — the
-  // `## Unresolved findings` rendering rule could be rewritten to emit `file:line` with §4's
+  // `## Problems the reviewers found and did not fix` rendering rule could be rewritten to emit `file:line` with §4's
   // descriptive PARAGRAPH about it still green, so the thing the agent actually renders from is
   // what gets pinned (MUST-CHECK prose-pins-dont-cover-the-bash-fence-they-describe, applied to an
   // instruction rather than a command line).
@@ -2728,7 +2728,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
         `a symlinked ${leaf} was accepted`,
       ).not.toBe(0);
       // PCO-371 fix pass, CRITICAL: a ZERO-BYTE input passed every conjunct of the original gate.
-      // An empty `body` opens a PR with no review-provenance line and no `## Unresolved findings`
+      // An empty `body` opens a PR with no review-provenance line and no `## Problems the reviewers found and did not fix`
       // section at all, on the unattended path, with `PR_OPENED:` still printed and the stack
       // entry still recorded — the disclosure IMPORTANT 9 and PCO-375 exist to guarantee gone
       // silently. Asserted per input, so `-s` on `body` alone is not enough.
@@ -3083,19 +3083,19 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
 
   // --- IMPORTANT 9: the PR body's own rendering instruction ----------------------------------
   //
-  // §4's prose restricting `## Unresolved findings` to sub-issue id + title was pinned; the thing
+  // §4's prose restricting `## Problems the reviewers found and did not fix` to sub-issue id + title was pinned; the thing
   // that actually TELLS the agent what to write was not. Rewriting it to render `file:line` and
   // the finding body left the suite green — the finding-9 disclosure with the prose pin still
   // passing. PCO-371 moved that instruction from the retired `DRAWBAR_PR_BODY_SENTINEL` heredoc
   // into §4's `body` write instruction; it is pinned as one whole UNIT with `toBe`, so a clause
   // appended to it now fails here as a deletion does.
-  test("IMPORTANT 9: the §4 write instruction itself restricts '## Unresolved findings' to sub-issue id + title", () => {
+  test("IMPORTANT 9: the §4 write instruction itself restricts '## Problems the reviewers found and did not fix' to sub-issue id + title", () => {
     const body = oneUnit("- `<cwd>/.drawbar/tmp/ship/body`", "§4's body write instruction");
     expect(body).toBe(SH4_BODY_FILE_UNIT);
     expect(body).toContain(
-      "On a flagged story it is written out here with its `## Unresolved findings` section " +
+      "On a flagged story it is written out here with its `## Problems the reviewers found and did not fix` section " +
         "already in it, listing each surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` " +
-        "and nothing else: never the finding body, never a `file:line`, never a `dedup_key` or " +
+        "then one plain sentence on what goes wrong for a person, and nothing else: never the finding body, never a `file:line`, never a `dedup_key` or " +
         "any of its fields, never a quoted source excerpt.",
     );
   });
@@ -3994,8 +3994,8 @@ describe("PCO-367 R4: the story-lead takes a base branch, opens no PR, returns o
 
   // Fix pass (R4 review, Critical): the sentence this replaces read "…so your caller's §4 can
   // write them into the pull request body", which instructs the caller to do the one thing its
-  // own pinned rule forbids. commands/drawbar-ship.md §4 restricts `## Unresolved findings` to
-  // "each out-of-scope finding by its filed sub-issue id and title only — never the finding
+  // own pinned rule forbids. commands/drawbar-ship.md §4 restricts `## Problems the reviewers found and did not fix` to
+  // "each out-of-scope finding by its filed sub-issue id and title, plus one plain sentence on what goes wrong for a person — never the finding
   // body, `file:line`, or a quoted source excerpt" (pinned verbatim earlier in this file),
   // precisely because a public PR body opened before any human review announces an unpatched
   // detail to every repo watcher. `findings[]` entries cannot even use that safe form: ship
@@ -4494,7 +4494,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
     { doc: "ship", anchor: "see §4's `run-ci` rule for when to add and remove it", ns: [{ n: 4, title: "Open the stacked PR" }] },
     {
       doc: "ship",
-      anchor: "and §4's `## Unresolved findings` section is allowed to name a finding",
+      anchor: "and §4's `## Problems the reviewers found and did not fix` section is allowed to name a finding",
       ns: [{ n: 4, title: "Open the stacked PR" }],
     },
     { doc: "ship", anchor: "there is no id for §4 to render", ns: [{ n: 4, title: "Open the stacked PR" }] },
@@ -4670,7 +4670,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
     expect(hits("The story-lead's own §6 pushes its branch")).toEqual(["6"]);
     expect(hits("It returns the JSON report in its §7")).toEqual(["7"]);
     expect(hits("Your caller's §4 opens the stacked pull request")).toEqual(["4"]);
-    expect(hits("the story-lead's one fix pass, and §4's `## Unresolved findings` section")).toEqual([]);
+    expect(hits("the story-lead's one fix pass, and §4's `## Problems the reviewers found and did not fix` section")).toEqual([]);
     expect(hits("re-run §3 and §4 on the fixes")).toEqual([]);
   });
 
@@ -4865,7 +4865,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
     const body = stackModel();
     expect(body).toContain(
       "A `flagged` story is one whose single fix pass left Important findings alive. **The PR " +
-        "opens anyway**, annotated with an `## Unresolved findings` section, and **the stack " +
+        "opens anyway**, annotated with an `## Problems the reviewers found and did not fix` section, and **the stack " +
         "continues on top of it** — the next story is based on this story's branch exactly as " +
         "if it had come back clean.",
     );
@@ -5314,7 +5314,7 @@ describe("PCO-369 R6: cross-references reconciled, the stack model documented, L
 
   test("Operator notes explain a flagged PR is one to review, and that a parked story ends the stack", () => {
     expect(operatorNotesR6()).toContain(
-      "**A `flagged` PR is a PR to review, not a failure.** Its `## Unresolved findings` section " +
+      "**A `flagged` PR is a PR to review, not a failure.** Its `## Problems the reviewers found and did not fix` section " +
         "names each surviving finding by sub-issue id and title; the write-ups are in those " +
         "Linear sub-issues, deliberately not in the public PR body.",
     );
@@ -6404,7 +6404,7 @@ describe("PCO-375: reviewed_sha pins the commit each review actually read", () =
 
   // The prose above tells the agent what the provenance line IS; this pins the instruction it
   // actually renders from. Pinning only the descriptive paragraph is the exact vacuous shape
-  // IMPORTANT 9 caught for `## Unresolved findings` — the rendering instruction was rewritten with
+  // IMPORTANT 9 caught for `## Problems the reviewers found and did not fix` — the rendering instruction was rewritten with
   // the prose pin still green.
   //
   // PCO-371 moved that instruction out of the `DRAWBAR_PR_BODY_SENTINEL` heredoc (retired with the
@@ -6425,7 +6425,7 @@ describe("PCO-375: reviewed_sha pins the commit each review actually read", () =
         "<spec_source>; N commits since`, with both shas already shape-checked and resolved per " +
         "the prose above.",
     );
-    expect(body[0]).toContain("On a flagged story it is written out here with its `## Unresolved findings` section");
+    expect(body[0]).toContain("On a flagged story it is written out here with its `## Problems the reviewers found and did not fix` section");
     // The retired heredoc must not come back carrying it.
     expect(readNonEmpty(join(root, SHIP_375))).not.toContain("DRAWBAR_PR_BODY_SENTINEL");
   });
@@ -7039,8 +7039,8 @@ const SH4_BODY_FILE_UNIT =
   "plain-language opening first, the folded evidence block last. The evidence block holds the line " +
   "`Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, with " +
   "both shas already shape-checked and resolved per the prose above. On a flagged story it is " +
-  "written out here with its `## Unresolved findings` section already in it, listing each " +
-  "surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` and nothing else: never the finding " +
+  "written out here with its `## Problems the reviewers found and did not fix` section already in it, listing each " +
+  "surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` then one plain sentence on what goes wrong for a person, and nothing else: never the finding " +
   "body, never a `file:line`, never a `dedup_key` or any of its fields, never a quoted source " +
   "excerpt.";
 
@@ -7091,9 +7091,9 @@ const SH4_PROSE: readonly string[] = [
     "`FLAGGED` comes from the story-lead's §7 report `status` field, on the `ok | flagged` " +
       "contract: `flagged` becomes the JSON boolean `true`, `ok` becomes `false` — a `parked` " +
       "story never reaches this step at all, because §2 routes it straight to *Parking a " +
-      "story*. On a **flagged** story, the PR body carries an `## Unresolved findings` section, " +
+      "story*. On a **flagged** story, the PR body carries an `## Problems the reviewers found and did not fix` section, " +
       "built before `gh pr create` runs, never appended after. That section names each " +
-      "surviving finding by its filed sub-issue id and title only — never the finding body, " +
+      "surviving finding by its filed sub-issue id and title, plus one plain sentence on what goes wrong for a person — never the finding body, " +
       "`file:line`, a finding's `dedup_key` or any of its `file` / `line` / `claim_hash` " +
       "fields, or a quoted source excerpt; the full write-up already lives in the sub-issue §3 " +
       "filed for it, and republishing it in a public PR body announces an unpatched detail to " +
@@ -7119,7 +7119,7 @@ const SH4_PROSE: readonly string[] = [
     "- **Title.** What a person gets, in no more than 12 words, with no ticket code, flag name or file name. Use only letters, digits, spaces and `. , : ( ) / + -`: the title is typed into the opening command as a literal (see the reader review below), and a title with a quote, a dollar sign, a backtick or a backslash is rewritten, not escaped.",
     "- **Opening, one or two sentences.** Who is affected, what they can now do or see, and why. A story with no visible effect says so (\"No one sees a difference; this removes a risk of ...\"). No mechanism, file, flag or code name here. A new term gets a one-line meaning at its first use. A sub-issue id is always followed by its title.",
     "- **Stack sentence, when the PR is not the run's first.** One sentence on what the stack achieves for a person and where this PR sits in it. Name the other PRs by title.",
-    "- **`## Unresolved findings` and `## Screenshots`**, when the rules above call for them, each built before the reader review runs.",
+    "- **`## Problems the reviewers found and did not fix` and `## Screenshots`**, when the rules above call for them, each built before the reader review runs.",
     "- **The ask, one sentence.** What the reader must do and by when, for example \"Review and merge this PR in order with the others when you are back; no decision is needed first.\"",
     "- **Last, one folded evidence block** (`<details>` with a summary line `Evidence`), holding the tests run, the gate results and the review-provenance line, which is a line of its own: `Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, where `<reviewed_sha>` is what the reviewers read, `<spec_source>` is `cli` or `brief` — the source that review actually read the spec from — and `N` is the commit count between the sha and the story-lead's `head_sha`, all three taken from that report. The fix pass commits after the reviewers read the diff, so every review is stale by construction and `N` is normally non-zero; stating it is the whole point, and no second review round closes it. **State `N` even when it is zero** — an omitted line reads exactly like a review that was never stale, which is the claim this line exists to stop anyone making. **State `<spec_source>` even when it is `cli`** — a review that never reached Linear is blind to an AMENDED banner, a superseded section and a struck decision, and on this unattended path the PR body is the only place a reader can find that out; printing it only when it is `brief` makes its absence the signal, and an absence is what nobody notices at 3am. The line moved from the top of the body to this block because the reader standard puts evidence last and folded (rules RS1 and RS6); the fence below still refuses a body that lacks it, and finds it anywhere in the body.",
     "If the session's own instructions require an attribution footer, it goes into the body file now, before the reader review. The review stamps every byte, so a footer added later is refused.",
@@ -7148,6 +7148,7 @@ const SH4_PROSE: readonly string[] = [
     SH4_BODY_FILE_UNIT,
     "### Reader review: run it on the final title and body before anything opens",
     "The reader gate refuses `gh pr create` and `gh pr edit` unless the exact text `title`, a blank line, then `body` has a passing stamp from `reader-review` (rules RS1 to RS12 of the `reader-standard` skill, kind `pr`). Once the four files are written, run `bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pr-reader-review.sh\"` with the Bash tool's `timeout` set to 600000 (the review is a model run). The script reads only `title` and `body` under `<cwd>/.drawbar/tmp/ship/`, checks the title's shape, joins the two into `pr-text` there, runs `reader-review` on it and prints `READER_PASS` with a `PR_TITLE_LITERAL:` line, or `READER_FAIL` with the findings.",
+    "**Project glossary (rule RS8).** A story that names a new product concept can only pass when the reviewer is given the project's glossary. If the project keeps one, set `DRAWBAR_READER_GLOSSARY` to its absolute path in the shell that runs this command, next to `DRAWBAR_SHIP_CONFIG`; the script passes it to `reader-review` as `--glossary`. An optional first argument to the script does the same and wins. With neither set, the review runs without a glossary. A glossary path that is set but is not a readable file is a `READER_FAIL`, never a silent skip.",
     "**One fix-and-retry round, then park.** On `READER_FAIL`, read the findings it printed, rewrite `title` and `body` with the Write tool to fix each finding by its rule (the most common are the opening naming a mechanism, a bare ticket or PR number, and evidence above the end of the body), and run the script a second time. A second `READER_FAIL`, or a `reader-review` that cannot run, parks the story: go to *Parking a story* as Outcome A, with `parked_reason` naming the rule numbers that failed and never the quoted text. **There is no bypass.** Never put `READER_GATE=off` in a command here, never `--no-verify`, and never open the PR from text the script did not pass.",
     "**The title is the one value the opening fence has typed into it.** The reader gate has to read the exact title before the command runs, and it cannot read a value that a shell builds at run time, so the opening fence's `gh pr create` and `gh pr edit` carry `--title '<the PR_TITLE_LITERAL line>'` as a literal, in single quotes. Copy it from the review script's `PR_TITLE_LITERAL:` output and from nowhere else. The script's title shape gate is what makes that safe: a title that passes it holds nothing a shell treats as special inside single quotes. The body is not typed anywhere: both commands pass `--body-file .drawbar/tmp/ship/body`, a relative path the gate resolves from the same working directory the fence runs in. After a pass, do not touch `title` or `body` again; one changed byte voids the stamp and the gate refuses the opening command.",
     "**The opening fence authors none of those four files and substitutes only the title literal into itself.** Every other value it consumes it reads back out of a file it did not write, with `jq -r`, `cat` or `--body-file`, so no text from the repository under review is parsed by a shell, except a title that the review script's shape gate has already passed. That is the whole guarantee: the one slot there is has a gate before it and a stamp on the exact text.",
@@ -7261,9 +7262,9 @@ const SHIP_PINNED_ELSEWHERE: readonly string[] = [
   "cat > \"$PR_BODY_FILE\" <<'DRAWBAR_PR_BODY_SENTINEL' <the PR body, verbatim — nothing here " +
     "expands. Its first line is the review-provenance line `reviewed at <reviewed_sha> from " +
     "<spec_source>; N commits since`, with both shas already shape-checked and resolved per the " +
-    "prose above. On a flagged story it is written out here with its `## Unresolved findings` " +
+    "prose above. On a flagged story it is written out here with its `## Problems the reviewers found and did not fix` " +
     "section already in it, listing each surviving finding as `<SUB-ISSUE-ID> — <sub-issue " +
-    "title>` and nothing else: never the finding body, never a `file:line`, never a `dedup_key` " +
+    "title>` then one plain sentence on what goes wrong for a person, and nothing else: never the finding body, never a `file:line`, never a `dedup_key` " +
     "or any of its fields, never a quoted source excerpt.> DRAWBAR_PR_BODY_SENTINEL",
 ];
 
@@ -7563,8 +7564,8 @@ describe("PCO-374/375/376 fix pass: the new rules are closed in place, and nothi
         "status `Unplanned`, label `found-in-review`, a `## Dependencies` section — and record its id " +
         "alongside the `out_of_scope` ones. `findings[]` carries the Critical and Important findings " +
         "that outlived the story-lead's one fix pass, unfixed **security** findings included, and " +
-        "§4's `## Unresolved findings` section is allowed to name a finding by sub-issue id and title " +
-        "only: with no sub-issue filed here there is no id for §4 to render, so a flagged story's " +
+        "§4's `## Problems the reviewers found and did not fix` section is allowed to name a finding by sub-issue id and title, " +
+        "plus one plain sentence on what goes wrong: with no sub-issue filed here there is no id for §4 to render, so a flagged story's " +
         "surviving findings would be unpublishable and would die with the session exactly as an " +
         "unfiled `out_of_scope` entry does. Put the finding's `detail` in the sub-issue body — a " +
         "Linear issue is not world-readable the way the pull request is, which is the whole reason " +
@@ -7876,7 +7877,7 @@ function bashFences(relPath: string): string[] {
 // deterministic path is safe, the reason `branch` is read from its own file, and the reason both
 // $CONFIG guards run again all live here and nowhere else in the fence.
 const SH4_FENCE_COMMENTS: readonly string[] = [
-    "NOTHING in this fence is substituted except the stamped title literal in Check 3 (two places; see there), and it authors none of the four files it reads. The four values that come out of the repository under review — the inputs document, the branch name, the PR title, the PR body — were written by the agent with the Write tool before this block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so untrusted text is never parsed by a shell at all. The four QUOTED heredocs that used to carry them are gone for good: a substituted line equal to a heredoc terminator closes it early and the rest is parsed as shell, and those terminators are fixed literals published in this public repository. Do not reintroduce a heredoc, a here-string, or any other fill-in slot here. The path is DETERMINISTIC rather than `mktemp -d`, because the agent has to know where to write before this block runs; Preflight prints it, so it is never guessed. That gives up everything `mktemp -d` provided for free, and each half is bought back explicitly below. Unguessability is replaced by the directory gate: this path is entirely predictable, so a branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths cannot see a symlinked component above them — the agent's writes and this block's cleanup would both follow it and truncate four arbitrary files under the operator's identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself. Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT trap truncates all four to zero bytes however this block ends, so a run that REACHES it leaves nothing reusable behind: the file gate below refuses a zero-byte file. It truncates rather than deletes, and it skips a leaf that is a symlink: `: >` follows a symlinked leaf and would truncate its target, where `rm -f` only ever removed the link; but a run that dies before it — session killed, agent errored, story parked in an earlier section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one. Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would otherwise open a PR with no review provenance and no `## Unresolved findings` section at all. What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary regular files at these names, and they would satisfy every other check on the very first run, so a tracked input is refused exactly as a tracked `$CONFIG` is.",
+    "NOTHING in this fence is substituted except the stamped title literal in Check 3 (two places; see there), and it authors none of the four files it reads. The four values that come out of the repository under review — the inputs document, the branch name, the PR title, the PR body — were written by the agent with the Write tool before this block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so untrusted text is never parsed by a shell at all. The four QUOTED heredocs that used to carry them are gone for good: a substituted line equal to a heredoc terminator closes it early and the rest is parsed as shell, and those terminators are fixed literals published in this public repository. Do not reintroduce a heredoc, a here-string, or any other fill-in slot here. The path is DETERMINISTIC rather than `mktemp -d`, because the agent has to know where to write before this block runs; Preflight prints it, so it is never guessed. That gives up everything `mktemp -d` provided for free, and each half is bought back explicitly below. Unguessability is replaced by the directory gate: this path is entirely predictable, so a branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths cannot see a symlinked component above them — the agent's writes and this block's cleanup would both follow it and truncate four arbitrary files under the operator's identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself. Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT trap truncates all four to zero bytes however this block ends, so a run that REACHES it leaves nothing reusable behind: the file gate below refuses a zero-byte file. It truncates rather than deletes, and it skips a leaf that is a symlink: `: >` follows a symlinked leaf and would truncate its target, where `rm -f` only ever removed the link; but a run that dies before it — session killed, agent errored, story parked in an earlier section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one. Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would otherwise open a PR with no review provenance and no `## Problems the reviewers found and did not fix` section at all. What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary regular files at these names, and they would satisfy every other check on the very first run, so a tracked input is refused exactly as a tracked `$CONFIG` is.",
     "--- inputs directory gate ----------------------------------------------------------------",
     "BEFORE the trap is armed: the trap's `: >` follows a symlinked path component exactly as the agent's writes do, so a redirected $IN_DIR has to be refused while there is still nothing armed to truncate through it. Both sides are symlink-resolved, so an operator whose checkout is reached through a symlink is not refused, while a symlink at any component under it is.",
     "--- end inputs directory gate --------------------------------------------------------------",

@@ -46,7 +46,7 @@ earlier story's work too — green, plausible, and near-impossible to spot in th
 story-lead is **handed** its base and cuts from it; it never resolves one.
 
 **What `flagged` means.** A `flagged` story is one whose single fix pass left Important findings
-alive. **The PR opens anyway**, annotated with an `## Unresolved findings` section, and **the
+alive. **The PR opens anyway**, annotated with an `## Problems the reviewers found and did not fix` section, and **the
 stack continues on top of it** — the next story is based on this story's branch exactly as if it
 had come back clean. A story that is 90% right belongs in front of the operator at 8am,
 annotated, rather than costing the rest of the night's throughput.
@@ -614,7 +614,7 @@ triage gate, and this command has no authority to walk a finding through it unat
 status `Unplanned`, label `found-in-review`, a `## Dependencies` section — and record its id
 alongside the `out_of_scope` ones. `findings[]` carries the Critical and Important findings
 that outlived the story-lead's one fix pass, unfixed **security** findings included, and §4's
-`## Unresolved findings` section is allowed to name a finding by sub-issue id and title only:
+`## Problems the reviewers found and did not fix` section is allowed to name a finding by sub-issue id and title, plus one plain sentence on what goes wrong:
 with no sub-issue filed here there is no id for §4 to render, so a flagged story's surviving
 findings would be unpublishable and would die with the session exactly as an unfiled
 `out_of_scope` entry does. Put the finding's `detail` in the sub-issue body — a Linear issue
@@ -683,9 +683,9 @@ extra evidence, worst of all when a change ripples up the stack.
 `FLAGGED` comes from the story-lead's §7 report `status` field, on the `ok | flagged`
 contract: `flagged` becomes the JSON boolean `true`, `ok` becomes `false` — a `parked` story
 never reaches this step at all, because §2 routes it straight to *Parking a story*. On a
-**flagged** story, the PR body carries an `## Unresolved findings` section, built before
+**flagged** story, the PR body carries an `## Problems the reviewers found and did not fix` section, built before
 `gh pr create` runs, never appended after. That section names each surviving finding by
-its filed sub-issue id and title only — never the finding body, `file:line`, a finding's
+its filed sub-issue id and title, plus one plain sentence on what goes wrong for a person — never the finding body, `file:line`, a finding's
 `dedup_key` or any of its `file` / `line` / `claim_hash` fields, or a quoted source excerpt;
 the full write-up already lives in the sub-issue §3 filed for it, and republishing it in a
 public PR body announces an unpatched detail to every repo watcher before the operator's
@@ -719,7 +719,7 @@ the story's sub-issue, in this order:
   sub-issue id is always followed by its title.
 - **Stack sentence, when the PR is not the run's first.** One sentence on what the stack achieves for
   a person and where this PR sits in it. Name the other PRs by title.
-- **`## Unresolved findings` and `## Screenshots`**, when the rules above call for them, each built
+- **`## Problems the reviewers found and did not fix` and `## Screenshots`**, when the rules above call for them, each built
   before the reader review runs.
 - **The ask, one sentence.** What the reader must do and by when, for example "Review and merge this
   PR in order with the others when you are back; no decision is needed first."
@@ -780,8 +780,8 @@ it leaves them on disk, and no gate can tell a stale input from a fresh one.
   plain-language opening first, the folded evidence block last. The evidence block holds the
   line `Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, with
   both shas already shape-checked and resolved per the prose above. On a flagged story it is
-  written out here with its `## Unresolved findings` section already in it, listing each
-  surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` and nothing else: never the finding
+  written out here with its `## Problems the reviewers found and did not fix` section already in it, listing each
+  surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` then one plain sentence on what goes wrong for a person, and nothing else: never the finding
   body, never a `file:line`, never a `dedup_key` or any of its fields, never a quoted source
   excerpt.
 
@@ -794,6 +794,13 @@ skill, kind `pr`). Once the four files are written, run
 (the review is a model run). The script reads only `title` and `body` under `<cwd>/.drawbar/tmp/ship/`,
 checks the title's shape, joins the two into `pr-text` there, runs `reader-review` on it and prints
 `READER_PASS` with a `PR_TITLE_LITERAL:` line, or `READER_FAIL` with the findings.
+
+**Project glossary (rule RS8).** A story that names a new product concept can only pass when the
+reviewer is given the project's glossary. If the project keeps one, set `DRAWBAR_READER_GLOSSARY` to
+its absolute path in the shell that runs this command, next to `DRAWBAR_SHIP_CONFIG`; the script
+passes it to `reader-review` as `--glossary`. An optional first argument to the script does the same
+and wins. With neither set, the review runs without a glossary. A glossary path that is set but is
+not a readable file is a `READER_FAIL`, never a silent skip.
 
 **One fix-and-retry round, then park.** On `READER_FAIL`, read the findings it printed, rewrite
 `title` and `body` with the Write tool to fix each finding by its rule (the most common are the
@@ -878,7 +885,7 @@ heredoc that carries substituted text reopens the vector in full.
 # section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one.
 # Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can
 # check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would
-# otherwise open a PR with no review provenance and no `## Unresolved findings` section at all.
+# otherwise open a PR with no review provenance and no `## Problems the reviewers found and did not fix` section at all.
 # What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary
 # regular files at these names, and they would satisfy every other check on the very first run,
 # so a tracked input is refused exactly as a tracked `$CONFIG` is.
@@ -1578,7 +1585,7 @@ by Jamie or Michael; the brief names both ids.
   detection or repair of an out-of-order merge, and none is planned. If it happens, the recovery
   is a rebase you do by hand. This is a contract rather than a missing feature, so it is not
   something to file.
-- **A `flagged` PR is a PR to review, not a failure.** Its `## Unresolved findings` section names
+- **A `flagged` PR is a PR to review, not a failure.** Its `## Problems the reviewers found and did not fix` section names
   each surviving finding by sub-issue id and title; the write-ups are in those Linear sub-issues,
   deliberately not in the public PR body. A story that could not open a PR at all is the other
   case entirely: the run parked and stopped there, so the stack ends at the story below it.
