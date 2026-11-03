@@ -95,10 +95,10 @@ command -v drawbar-kb >/dev/null || { echo "no drawbar-kb — run /drawbar-setup
 command -v gh        >/dev/null && gh auth status >/dev/null 2>&1 || { echo "gh not authed"; exit 1; }
 
 # A WARNING, not a halt: only a story stacked on a previous story's branch (every story after
-# the first in a run) reaches the `gt track` / `gt submit` path that opens its PR, so a
+# the first in a run) reaches the `gt track` / `gt submit --update-only` path that stacks its PR, so a
 # single-story or leaf run never needs this. A multi-story run that does need it fails loud at
 # that later, story-specific point instead of here.
-command -v gt >/dev/null 2>&1 || echo "WARNING: no \`gt\` (Graphite) CLI — any story after the first in this run will fail to open its PR"
+command -v gt >/dev/null 2>&1 || echo "WARNING: no \`gt\` (Graphite) CLI — any story after the first in this run will fail to stack its PR"
 
 # A WARNING, never an exit: a brief-sourced review is degraded but honest, and it is reported as such.
 # Unattended, the operator's only signal is this line — without it "every story is flagged because
@@ -651,13 +651,18 @@ default would silently fall back to the repo's default branch, producing a PR wh
 carries every earlier story's work too — green, plausible, and near-impossible to spot in
 the morning.
 
-**The run's first story opens through `gh pr create` with `--base` set explicitly. Every story
+**Every story opens through `gh pr create` with `--base` set explicitly, from title and body text
+that has already passed the reader review below (the reader gate, a PreToolUse hook, refuses
+`gh pr create` and `gh pr edit` of any other text). The run's first story is based on the trunk. Every story
 after it is based on a previous story's branch, not the trunk, and ships as a Graphite stack
-by default: it runs `gt track` against that real parent, then `gt submit` to open the PR.**
+by default: it runs `gt track` against that real parent, opens the PR with `gh pr create` against that
+parent, then runs `gt submit --update-only` so Graphite links the open PR into the stack.**
 Shipping a dependent-PR wave through Graphite is the default everywhere in this repository, and
-this run's own stack is exactly that wave. Both paths still read the PR title and body only
-through the tool that consumes them at runtime, and both still go through the same PR-number
-read-back and stack-entry gates below.
+this run's own stack is exactly that wave. `gt submit` without `--update-only` is never run here: for
+a branch with no PR yet it would write the PR text from a commit message the reader review never saw,
+and the gate refuses it. Both paths still read the PR title and body only through the tool that
+consumes them at runtime (the one exception is the title, below), and both still go through the same
+PR-number read-back and stack-entry gates.
 
 **The `run-ci` label lives on the top of the stack only (Reid, 2026-09-17).** A stacked PR's CI
 workflows filter on the base branch, so every member above the first skips its suites and still
@@ -699,20 +704,46 @@ the report instead carries `no_visual_change`, the body says `No visual change:`
 opens, run `pr-screenshot-check <pr> -R <repo>` (from the meta-agent repo, on PATH): exit 1 means a visual change
 went out without images, or the PR's own diff carries image files, and the story is reported flagged, never ok.
 
-**Every PR body opens with a review-provenance line, on a flagged story and a clean one alike**,
-built before `gh pr create` runs: `reviewed at <reviewed_sha> from <spec_source>; N commits since`,
-where `<reviewed_sha>` is what the reviewers read, `<spec_source>` is `cli` or `brief` — the source
-that review actually read the spec from — and `N` is the commit count between the sha and the
-story-lead's `head_sha`, all three taken from that report. The fix pass commits after the reviewers
-read the diff, so every review is stale by construction and `N` is normally non-zero; stating it is
-the whole point, and no second review round closes it. **State `N` even when it is zero** — an
-omitted line reads exactly like a review that was never stale, which is the claim this line exists
-to stop anyone making. **State `<spec_source>` even when it is `cli`** — a review that never reached
-Linear is blind to an AMENDED banner, a superseded section and a struck decision, and on this
-unattended path the PR body is the only place a reader can find that out; printing it only when it
-is `brief` makes its absence the signal, and an absence is what nobody notices at 3am.
+**Every PR body opens with what the story changes for a person, and ends with a folded evidence block
+that carries the review-provenance line.** The text is read by someone who has not seen this run, and the
+reader review below fails it otherwise. Build the title and the body from the story-lead's `summary` and
+the story's sub-issue, in this order:
 
-**Shape-check both shas before you build that line, and park the story if either refuses.**
+- **Title.** What a person gets, in no more than 12 words, with no ticket code, flag name or file name.
+  Use only letters, digits, spaces and `. , : ( ) / + -`: the title is typed into the opening command
+  as a literal (see the reader review below), and a title with a quote, a dollar sign, a backtick or a
+  backslash is rewritten, not escaped.
+- **Opening, one or two sentences.** Who is affected, what they can now do or see, and why. A story
+  with no visible effect says so ("No one sees a difference; this removes a risk of ..."). No
+  mechanism, file, flag or code name here. A new term gets a one-line meaning at its first use. A
+  sub-issue id is always followed by its title.
+- **Stack sentence, when the PR is not the run's first.** One sentence on what the stack achieves for
+  a person and where this PR sits in it. Name the other PRs by title.
+- **`## Unresolved findings` and `## Screenshots`**, when the rules above call for them, each built
+  before the reader review runs.
+- **The ask, one sentence.** What the reader must do and by when, for example "Review and merge this
+  PR in order with the others when you are back; no decision is needed first."
+- **Last, one folded evidence block** (`<details>` with a summary line `Evidence`), holding the tests
+  run, the gate results and the review-provenance line, which is a line of its own:
+  `Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`,
+  where `<reviewed_sha>` is what the reviewers read, `<spec_source>` is `cli` or `brief` — the source
+  that review actually read the spec from — and `N` is the commit count between the sha and the
+  story-lead's `head_sha`, all three taken from that report. The fix pass commits after the reviewers
+  read the diff, so every review is stale by construction and `N` is normally non-zero; stating it is
+  the whole point, and no second review round closes it. **State `N` even when it is zero** — an
+  omitted line reads exactly like a review that was never stale, which is the claim this line exists
+  to stop anyone making. **State `<spec_source>` even when it is `cli`** — a review that never reached
+  Linear is blind to an AMENDED banner, a superseded section and a struck decision, and on this
+  unattended path the PR body is the only place a reader can find that out; printing it only when it
+  is `brief` makes its absence the signal, and an absence is what nobody notices at 3am. The line
+  moved from the top of the body to this block because the reader standard puts evidence last and
+  folded (rules RS1 and RS6); the fence below still refuses a body that lacks it, and finds it
+  anywhere in the body.
+
+If the session's own instructions require an attribution footer, it goes into the body file now, before
+the reader review. The review stamps every byte, so a footer added later is refused.
+
+**Shape-check both shas before you build the provenance line, and park the story if either refuses.**
 `reviewed_sha` and `head_sha` reach you as free text from a subagent that read a branch under
 review, and the story-lead's contract copies them through verbatim — nothing between there and here
 has looked at them. Each must match `^[0-9a-f]{40}$`, and each must resolve in the repository this PR opens
@@ -743,20 +774,50 @@ it leaves them on disk, and no gate can tell a stale input from a fresh one.
 - `<cwd>/.drawbar/tmp/ship/inputs.json` — the inputs document below, filled in.
 - `<cwd>/.drawbar/tmp/ship/branch` — the story-lead report's `branch` field, verbatim,
   one line and nothing else.
-- `<cwd>/.drawbar/tmp/ship/title` — the PR title, one line and nothing else.
-- `<cwd>/.drawbar/tmp/ship/body` — the PR body, verbatim. Its first line is the
-  review-provenance line `reviewed at <reviewed_sha> from <spec_source>; N commits since`, with
+- `<cwd>/.drawbar/tmp/ship/title` — the PR title, one line and nothing else, in the shape the
+  title rule above gives.
+- `<cwd>/.drawbar/tmp/ship/body` — the PR body, verbatim, built as the list above says: the
+  plain-language opening first, the folded evidence block last. The evidence block holds the
+  line `Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, with
   both shas already shape-checked and resolved per the prose above. On a flagged story it is
   written out here with its `## Unresolved findings` section already in it, listing each
   surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` and nothing else: never the finding
   body, never a `file:line`, never a `dedup_key` or any of its fields, never a quoted source
   excerpt.
 
-**The fence authors none of those four files and substitutes nothing into itself.** It carries
-no fill-in slot at all: every value it consumes it reads back out of a file it did not write,
-with `jq -r`, `cat` or `--body-file`, so no text from the repository under review is ever
-parsed by a shell. That is the whole guarantee, and it holds structurally — there is no
-instruction here for an agent to follow correctly or to skip.
+### Reader review: run it on the final title and body before anything opens
+
+The reader gate refuses `gh pr create` and `gh pr edit` unless the exact text `title`, a blank line,
+then `body` has a passing stamp from `reader-review` (rules RS1 to RS12 of the `reader-standard`
+skill, kind `pr`). Once the four files are written, run
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/pr-reader-review.sh"` with the Bash tool's `timeout` set to 600000
+(the review is a model run). The script reads only `title` and `body` under `<cwd>/.drawbar/tmp/ship/`,
+checks the title's shape, joins the two into `pr-text` there, runs `reader-review` on it and prints
+`READER_PASS` with a `PR_TITLE_LITERAL:` line, or `READER_FAIL` with the findings.
+
+**One fix-and-retry round, then park.** On `READER_FAIL`, read the findings it printed, rewrite
+`title` and `body` with the Write tool to fix each finding by its rule (the most common are the
+opening naming a mechanism, a bare ticket or PR number, and evidence above the end of the body), and
+run the script a second time. A second `READER_FAIL`, or a `reader-review` that cannot run, parks the
+story: go to *Parking a story* as Outcome A, with `parked_reason` naming the rule numbers that
+failed and never the quoted text. **There is no bypass.** Never put `READER_GATE=off` in a command
+here, never `--no-verify`, and never open the PR from text the script did not pass.
+
+**The title is the one value the opening fence has typed into it.** The reader gate has to read the
+exact title before the command runs, and it cannot read a value that a shell builds at run time, so
+the opening fence's `gh pr create` and `gh pr edit` carry `--title '<the PR_TITLE_LITERAL line>'` as a
+literal, in single quotes. Copy it from the review script's `PR_TITLE_LITERAL:` output and from nowhere
+else. The script's title shape gate is what makes that safe: a title that passes it holds nothing a shell
+treats as special inside single quotes. The body is not typed anywhere: both commands pass
+`--body-file .drawbar/tmp/ship/body`, a relative path the gate resolves from the same working
+directory the fence runs in. After a pass, do not touch `title` or `body` again; one changed byte
+voids the stamp and the gate refuses the opening command.
+
+**The opening fence authors none of those four files and substitutes only the title literal into itself.** Every
+other value it consumes it reads back out of a file it did not write, with `jq -r`, `cat` or
+`--body-file`, so no text from the repository under review is parsed by a shell, except a title that the
+review script's shape gate has already passed. That is the whole guarantee: the one slot there is has
+a gate before it and a stamp on the exact text.
 
 **The inputs document is a file you write, never a string the fence assembles.** `branch` is
 not a key in it: a `"` in a value placed between two `"` inside a hand-assembled JSON document
@@ -790,7 +851,8 @@ heredoc that carries substituted text reopens the vector in full.
 ```bash
 : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT must be set}"
 
-# NOTHING in this fence is substituted, and it authors none of the four files it reads. The
+# NOTHING in this fence is substituted except the stamped title literal in Check 3 (two places; see
+# there), and it authors none of the four files it reads. The
 # four values that come out of the repository under review — the inputs document, the branch
 # name, the PR title, the PR body — were written by the agent with the Write tool before this
 # block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so
@@ -847,6 +909,11 @@ for f in "$INPUTS" "$BRANCH_FILE" "$PR_TITLE_FILE" "$PR_BODY_FILE"; do
     || true
 done
 # --- end inputs file gate ---------------------------------------------------------------------
+
+# The body must carry its `Review provenance:` evidence line (it sits in the folded block at the end,
+# not at the top). A zero-provenance body is refused here, before any PR is opened.
+grep -q '^Review provenance: reviewed at ' "$PR_BODY_FILE" \
+  || { echo "FATAL: the body has no 'Review provenance: reviewed at ...' line — refusing; write the body again and rerun the reader review."; exit 1; }
 
 # --- read the written inputs ------------------------------------------------------------
 jq -e . "$INPUTS" >/dev/null 2>&1 || { echo "FATAL: the inputs document is not valid JSON — refusing."; exit 1; }
@@ -940,82 +1007,83 @@ BASE_JSON=$(bun run "${CLAUDE_PLUGIN_ROOT}/scripts/lib/stack.ts" resolve-base --
 BASE=$(printf '%s' "${BASE_JSON:-null}" | jq -r 'if (type=="object" and .ok==true) then .base else empty end' 2>/dev/null)
 [ -n "$BASE" ] && [ "$BASE" != "null" ] || { BASE_REASON=$(printf '%s' "${BASE_JSON:-null}" | jq -r '.reason // "unreadable-verdict"' 2>/dev/null); echo "NO_PR: resolve-base refused ($BASE_REASON) — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
 
-# Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and
-# `--body-file` reads it inside `gh`, so no report text is ever part of this command line.
-# A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the
-# run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch
-# is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`:
-# `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens
-# (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and
-# `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever
-# part of a command line either way.
-if [ "$BASE" = "$BASE_BRANCH" ]; then
-PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE") \
-  || { echo "NO_PR: gh pr create failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
-else
-# `gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a
+# Check 3 of 3 — open it. Every story opens through `gh pr create` from the text the reader review
+# stamped. The reader gate (a PreToolUse hook) reads the exact title and body BEFORE this block runs,
+# so `--title` is the literal the review script printed as `PR_TITLE_LITERAL:` (its shape was gated
+# by the review script) and `--body-file` is a relative path to the file the gate hashed. Neither is built at run
+# time, because the gate cannot see a value that is. `gh` is the command word of each line below, not
+# the inside of a `$(...)`, so the gate sees every call. Replace `<PR_TITLE_LITERAL>` in the two
+# places it appears with that exact printed title, in the single quotes shown, and change nothing else.
+# A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run. A
+# story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a
+# dependent-PR stack is Graphite: `gt track` records the real parent so the stack tool knows the
+# chain, `gh pr create` opens the PR against that parent, and `gt submit --update-only` links the open
+# PR into the stack. `gt submit` never runs without `--update-only`: for a branch with no PR it would
+# write the PR text from a commit message nobody reviewed, and the gate refuses it.
+if [ "$BASE" != "$BASE_BRANCH" ]; then
+# `gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so its calls run in a
 # subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this
 # fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch;
 # `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain,
 # so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it
 # checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.)
+# Tracking happens BEFORE the PR exists, so a refusal here is still Outcome A: nothing is open.
 git -C "$PROJECT_DIR" checkout "$BRANCH" >/dev/null 2>&1 \
   || { echo "NO_PR: could not check out $BRANCH to track it with Graphite — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
 ( cd "$PROJECT_DIR" && gt track --parent "$BASE" ) \
   || { echo "NO_PR: gt track refused — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
-# `gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no
-# `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`,
-# `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description`
-# and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still
-# opens or updates the PR — with a title and description Graphite derives from the branch's
-# commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit`
-# immediately below overwrites both with those same two files, the same source `gh pr create`
-# reads from in the other arm. Both arms must open a non-draft PR, and this one only does with
-# `--publish`: in a non-interactive shell (an agent's) `gt submit` prints "Running in
-# non-interactive mode" and creates new PRs in draft mode, where an unflagged `gh pr create`
-# opens a ready PR. `--publish` overrides that default so this arm matches the other.
-( cd "$PROJECT_DIR" && gt submit --no-edit --publish ) \
-  || { echo "NO_PR: gt submit failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
-# Graphite can write its own commit-message description into the PR AFTER `gt submit` returns
-# (observed twice: it overwrote the body this fence had just set), so a single `gh pr edit` and
-# one read-back is a race. `gh pr edit` returning success is not proof its write landed with this
-# exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as
-# one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all:
-# long enough for an asynchronous Graphite sync to finish, short enough not to stall an
-# unattended run). An attempt succeeds only when the body read back starts with the same first
-# line `$PR_BODY_FILE` was built with AND still does after a 5 second settle and a second read: a
-# match straight after the edit proves nothing if Graphite's write lands a moment later, and
-# running on with Graphite's description is worse than parking. 5 seconds is a few times the
-# latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only
-# after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case
-# is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls.
-# Only after the last attempt does the fence refuse.
+fi
+gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title '<PR_TITLE_LITERAL>' --body-file .drawbar/tmp/ship/body >/dev/null \
+  || { echo "NO_PR: gh pr create failed — park the story; paraphrase, never paste, the detail on stderr."; exit 1; }
+if [ "$BASE" != "$BASE_BRANCH" ]; then
+# `gt submit --update-only` (checked against `gt submit --help` on the real CLI, version 1.8.6) only
+# pushes branches and updates PRs that already exist, and takes no `--title` or `--body-file`. The PR
+# is open from here on, so every refusal below is PR_UNRECORDED (Outcome C), never NO_PR.
+( cd "$PROJECT_DIR" && gt submit --update-only ) \
+  || { echo "PR_UNRECORDED: gt submit --update-only failed after gh pr create opened the PR — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+# Graphite can write its own description into the PR AFTER `gt submit` returns (observed twice: it
+# overwrote the body this fence had just set), so the check is a loop, not one read. `gh pr edit`
+# returning success is not proof its write landed with this exact content, and a later Graphite write
+# can undo it. So the edit AND the read-back repeat as one unit, up to four attempts, waiting 2, 4
+# then 8 seconds between them (14 seconds in all: long enough for an asynchronous Graphite sync to
+# finish, short enough not to stall an unattended run). The edit passes the same stamped title and
+# body file, so the reader gate allows it. An attempt succeeds only when the body read back EQUALS the
+# body file (so it holds every `Review provenance:` line the file holds, wherever they sit) and the
+# title read back equals the title file, AND they still do after a 5 second settle and a second read: a
+# match straight after the edit proves nothing if Graphite's write lands a moment later, and running
+# on with Graphite's description is worse than parking. 5 seconds is a few times the latency of one
+# `gh` call, enough to catch a sync that trails the edit, and it is spent only after a match. A
+# mismatch on either read fails the attempt and the loop re-applies. Worst case is about 34 seconds of
+# waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls. Only after the last attempt
+# does the fence refuse. `$(...)` strips trailing newlines from both sides of each comparison, so a
+# final newline that GitHub adds or drops is not a mismatch.
+PR_BODY_WANT=$(cat "$PR_BODY_FILE")
+PR_TITLE_WANT=$(cat "$PR_TITLE_FILE")
 PR_BODY_ATTEMPTS=4
 PR_BODY_SETTLE=5
 PR_BODY_TRY=1
 PR_BODY_WAIT=2
 PR_BODY_OK=false
 while [ "$PR_BODY_TRY" -le "$PR_BODY_ATTEMPTS" ]; do
-gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \
-  && PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
-  && [ "${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK" ] \
+gh pr edit "$BRANCH" --repo "$REPO" --title '<PR_TITLE_LITERAL>' --body-file .drawbar/tmp/ship/body \
+  && PR_BODY_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json title,body -q '.title + "\n" + .body') \
+  && [ "$PR_BODY_CHECK" = "$PR_TITLE_WANT"$'\n'"$PR_BODY_WANT" ] \
   && sleep "$PR_BODY_SETTLE" \
-  && PR_BODY_SETTLED_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json body -q .body) \
-  && [ "${PR_BODY_SETTLED_CHECK#reviewed at }" != "$PR_BODY_SETTLED_CHECK" ] \
+  && PR_BODY_SETTLED_CHECK=$(gh pr view "$BRANCH" --repo "$REPO" --json title,body -q '.title + "\n" + .body') \
+  && [ "$PR_BODY_SETTLED_CHECK" = "$PR_TITLE_WANT"$'\n'"$PR_BODY_WANT" ] \
   && PR_BODY_OK=true
 [ "$PR_BODY_OK" = "true" ] && break
 if [ "$PR_BODY_TRY" -lt "$PR_BODY_ATTEMPTS" ]; then sleep "$PR_BODY_WAIT"; PR_BODY_WAIT=$((PR_BODY_WAIT * 2)); fi
 PR_BODY_TRY=$((PR_BODY_TRY + 1))
 done
 [ "$PR_BODY_OK" = "true" ] \
-  || { echo "PR_UNRECORDED: gt submit opened the PR but its title and body could not be set and confirmed after $PR_BODY_ATTEMPTS attempts — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
-# `gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same
-# way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the
-# PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly
-# as strictly as a `gh`-opened one.
-PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \
-  || { echo "PR_UNRECORDED: gt submit opened the PR but it could not be read back — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
+  || { echo "PR_UNRECORDED: the PR is open but its title and body could not be confirmed to equal the stamped text after $PR_BODY_ATTEMPTS attempts — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 fi
+# `gh pr create` printed its URL to /dev/null above so the gate sees a plain `gh` command line; the
+# URL is read back with `gh pr view`, the same way for both paths. This is the PR-number read-back
+# gate's input either way.
+PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \
+  || { echo "PR_UNRECORDED: gh pr create opened the PR but it could not be read back — the PR is open; park the story with that reason (Outcome C) and repair the run state by hand."; exit 1; }
 
 # --- pr number shape gate --------------------------------------------------------------------
 # Never `basename "$PR_URL"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.
@@ -1056,10 +1124,12 @@ one has its own prefix in the fence's output, and every refusal carries exactly 
 
 **Outcome A — no PR could be opened (halt, distinct from flagged).** A refusal at any of the
 three required checks — assert-chain refusing, resolve-base refusing, or the PR-opening call
-itself failing (`gh pr create` for the first story of a run, or `gt track` / `gt submit` for a
-stacked story based on a previous story's branch) — means the chain has no anchor to stack the
-next story on. This is never the flagged case: go to *Parking a story*, with `parked_reason`
-naming which call refused.
+itself failing (`gh pr create`, or `gt track` for a stacked story based on a previous story's
+branch, which runs before the PR exists) — means the chain has no anchor to stack the
+next story on. A second `READER_FAIL` from the reader review, or a `reader-review` that cannot run,
+is also Outcome A: no PR was opened and none may be opened from unreviewed text. This is never the
+flagged case: go to *Parking a story*, with `parked_reason` naming which call refused, or which
+reader-standard rule numbers failed (never the quoted text).
 
 **Outcome B — the PR opened.** Record `{story, branch, pr, base, flagged}` in the run state's
 `stack` array — `pr` as a JSON number (a positive integer, never the string form) and
@@ -1067,7 +1137,8 @@ naming which call refused.
 closing `assert-chain` re-read proves round-trips, then continue to §5.
 
 **Outcome C — the PR opened but the run state does not record it (halt).** Every refusal after
-the PR-opening call returns — an unreadable or non-integer PR number, a `FLAGGED` that is not a
+the PR-opening call returns (including `gt submit --update-only` failing, or the title and body not
+reading back equal to the stamped text) — an unreadable or non-integer PR number, a `FLAGGED` that is not a
 JSON literal, an entry that cannot be built, appended, or written, or a round-trip that fails — is
 prefixed `PR_UNRECORDED:` and leaves a real pull request open with nothing in the `stack` array
 pointing at it. It is not Outcome A: no `NO_PR:` line is printed, because a PR exists. Go to
@@ -1539,6 +1610,12 @@ by Jamie or Michael; the brief names both ids.
   `git add -A`. The fence deletes all four files on every exit path it reaches — but that is
   cleanup, not freshness: a run that dies before the fence leaves them on disk, and the fence's
   gate cannot tell a stale input from a fresh one. The agent rewrites all four each time.
+- **The PR text passes the reader review before any PR opens or is edited, and there is no bypass.**
+  The reader gate (a PreToolUse hook) refuses `gh pr create` and `gh pr edit` of text without a passing
+  `reader-review --kind pr` stamp. The PR-opening step runs that review once, with one fix-and-retry round, then
+  parks the story (Outcome A) with the failed rule numbers. `READER_GATE=off` is never used here, and
+  `gt submit` is only ever `gt submit --update-only`, so no PR text reaches GitHub from an unreviewed
+  commit message.
 - **Any guard refusal text must be paraphrased, never pasted**, into a KB entry or a Linear
   comment — `stack.ts`'s verdicts exactly as much as `ship-config.ts`'s, and a `parked_reason`
   exactly as much as a comment. Refusal `detail` strings echo absolute paths and the real repo

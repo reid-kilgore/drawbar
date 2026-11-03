@@ -1806,9 +1806,11 @@ describe("PCO-366 R3: ship §4/§5 — open the stacked PR, leave In Progress, p
     expect(s4()).toContain(
       "**Outcome A — no PR could be opened (halt, distinct from flagged).** A refusal at any " +
         "of the three required checks — assert-chain refusing, resolve-base refusing, or " +
-        "the PR-opening call itself failing (`gh pr create` for the first story of a run, or " +
-        "`gt track` / `gt submit` for a stacked story based on a previous story's branch) — " +
-        "means the chain has no anchor to stack the next story on.",
+        "the PR-opening call itself failing (`gh pr create`, or `gt track` for a stacked story " +
+        "based on a previous story's branch, which runs before the PR exists) — " +
+        "means the chain has no anchor to stack the next story on. A second `READER_FAIL` from " +
+        "the reader review, or a `reader-review` that cannot run, is also Outcome A: no PR was " +
+        "opened and none may be opened from unreviewed text.",
     );
   });
 
@@ -1837,7 +1839,9 @@ describe("PCO-366 R3: ship §4/§5 — open the stacked PR, leave In Progress, p
   test("§4's Outcome C covers 'the PR opened but the run state does not record it', and forbids a retry", () => {
     expect(s4()).toContain(
       "**Outcome C — the PR opened but the run state does not record it (halt).** Every " +
-        "refusal after the PR-opening call returns — an unreadable or non-integer PR number, " +
+        "refusal after the PR-opening call returns (including `gt submit --update-only` failing, " +
+        "or the title and body not reading back equal to the stamped text) — an unreadable or " +
+        "non-integer PR number, " +
         "a `FLAGGED` that is not a JSON literal, an entry that cannot be built, appended, or " +
         "written, or a round-trip that fails — is prefixed `PR_UNRECORDED:` and leaves a real " +
         "pull request open with nothing in the `stack` array pointing at it. It is not Outcome " +
@@ -2199,52 +2203,62 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     }
   });
 
-  // PR_URL is the one exception to "assigned exactly once": the run's first story opens through
-  // `gh pr create` directly, and every story after it opens through Graphite instead (`gt track`
-  // then `gt submit`), reading the PR back with `gh pr view` because `gt submit` hands back no
-  // URL of its own. The two assignments live in mutually exclusive arms of one `if`/`else` keyed
-  // on `$BASE` vs `$BASE_BRANCH`, so exactly one of them ever executes — pinned here as "exactly
-  // two, both inside that fork" rather than relaxed to "any number".
-  test("PR_URL is assigned exactly twice, once in each arm of the gh/Graphite fork", () => {
+  // Every story opens through `gh pr create` from the text the reader review stamped (the reader
+  // gate, a PreToolUse hook, refuses `gh pr create` and `gh pr edit` of any other text, and refuses
+  // `gt submit` of a branch with no PR). A story stacked on a previous story's branch additionally
+  // runs `gt track` BEFORE the PR exists and `gt submit --update-only` AFTER it, each inside an
+  // `if [ "$BASE" != "$BASE_BRANCH" ]` block. PR_URL is therefore assigned exactly once, read
+  // back with `gh pr view` after the create and the stacked-only block.
+  const STACKED_IF = 'if [ "$BASE" != "$BASE_BRANCH" ]; then';
+  const TITLE_SLOT = "--title '<PR_TITLE_LITERAL>'";
+  function openingParts(): { before: string; create: string; after: string; afterIdx: number } {
+    const c = code();
+    const first = c.indexOf(STACKED_IF);
+    const second = c.indexOf(STACKED_IF, first + 1);
+    const createAt = c.indexOf("\ngh pr create ");
+    expect(first, "the stacked-only `gt track` block's `if` was not found").toBeGreaterThan(-1);
+    expect(createAt, "`gh pr create` must sit on a line of its own").toBeGreaterThan(first);
+    expect(second, "the stacked-only `gt submit --update-only` block's `if` was not found").toBeGreaterThan(createAt);
+    const end = c.indexOf("\nfi\n", second);
+    expect(end).toBeGreaterThan(second);
+    return {
+      before: c.slice(first, createAt),
+      create: c.slice(createAt, second),
+      after: c.slice(second, end),
+      afterIdx: end,
+    };
+  }
+
+  test("PR_URL is assigned exactly once, by `gh pr view`, after `gh pr create` and the stacked-only block", () => {
     const c = code();
     const hits = [...c.matchAll(/(?:^|[\s;{(])PR_URL=/gm)];
-    expect(hits.length, `PR_URL must be assigned exactly twice (once per arm of the gh/Graphite fork), found ${hits.length}`).toBe(2);
-    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
-    const forkElse = c.indexOf("\nelse\n", forkStart);
-    const forkEnd = c.indexOf("\nfi\n", forkElse);
-    expect(forkStart, "the gh/Graphite fork's `if` was not found").toBeGreaterThan(-1);
-    expect(forkElse, "the gh/Graphite fork's `else` was not found").toBeGreaterThan(forkStart);
-    expect(forkEnd, "the gh/Graphite fork's `fi` was not found").toBeGreaterThan(forkElse);
-    const thenArm = c.slice(forkStart, forkElse);
-    const elseArm = c.slice(forkElse, forkEnd);
-    expect(oneLine(thenArm, "PR_URL=", "the fork's `then` arm")).toBe(
-      'PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE") \\',
-    );
-    expect(oneLine(elseArm, "PR_URL=", "the fork's `else` arm")).toBe(
-      'PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \\',
-    );
+    expect(hits.length, `PR_URL must be assigned exactly once, found ${hits.length}`).toBe(1);
+    const { afterIdx } = openingParts();
+    const line = oneLine(c, "PR_URL=", "§4's PR_URL read-back");
+    expect(line).toBe('PR_URL=$(gh pr view "$BRANCH" --repo "$REPO" --json url -q .url) \\');
+    expect(c.indexOf(line), "PR_URL is read back before the PR exists").toBeGreaterThan(afterIdx);
   });
 
   // MAESTRO review (drawbar PR #1, 2026-09-15): `gt submit --help` on the real CLI (checked
   // against version 1.8.6) supports only -d/--draft, -p/--publish, -e/--edit, -n/--no-edit,
   // --edit-title/--no-edit-title, --edit-description/--no-edit-description and -u/--update-only —
-  // no --title and no --body-file. A prior version of this fence passed both anyway, which would
-  // have failed this call outright for every stacked story. Pinned here so a flag `gt` does not
-  // support cannot come back into this line unnoticed.
-  test("the fork's `else` arm invokes `gt submit` with only flags the real CLI supports, and sets the title/body through `gh pr edit` instead", () => {
-    const c = code();
-    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
-    const forkElse = c.indexOf("\nelse\n", forkStart);
-    const forkEnd = c.indexOf("\nfi\n", forkElse);
-    const elseArm = c.slice(forkElse, forkEnd);
+  // no --title and no --body-file. Reader gate (2026-11-03): `gt submit` of a branch with no PR
+  // writes its text from a commit message the reader review never saw, so the gate refuses it;
+  // only `--update-only` is allowed, and it only runs once `gh pr create` has opened the PR.
+  test("the stacked-only block runs `gt track` before the PR exists and only `gt submit --update-only` after it", () => {
+    const { before, create, after } = openingParts();
+    expect(before).toContain('( cd "$PROJECT_DIR" && gt track --parent "$BASE" ) \\');
+    expect(before, "gt submit must not run before the PR exists").not.toContain("gt submit");
+    expect(create, "gh pr create sits between the two stacked-only blocks").toContain("gh pr create ");
     const GT_SUBMIT_SUPPORTED_FLAGS = new Set([
       "-d", "--draft", "-p", "--publish", "-e", "--edit", "-n", "--no-edit",
       "--edit-title", "--no-edit-title", "--edit-description", "--no-edit-description",
       "-u", "--update-only",
     ]);
-    const submitLines = elseArm.split("\n").filter((l) => l.startsWith("( cd ") && l.includes("gt submit"));
+    const submitLines = after.split("\n").filter((l) => l.startsWith("( cd ") && l.includes("gt submit"));
     expect(submitLines.length, "expected exactly one line invoking gt submit").toBe(1);
     const submitLine = submitLines[0]!;
+    expect(submitLine).toBe('( cd "$PROJECT_DIR" && gt submit --update-only ) \\');
     for (const flag of submitLine.matchAll(/(?<=\s)(--?[a-z][a-z-]*)/g)) {
       if (flag[1] === "cd") continue;
       expect(
@@ -2252,44 +2266,47 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
         `gt submit invocation passes '${flag[1]}', which \`gt submit --help\` does not list as a supported flag: ${submitLine}`,
       ).toBe(true);
     }
-    expect(submitLine, "gt submit must not take --title or --body-file — it has neither flag").not.toMatch(/--title|--body-file/);
-    // gt 1.8.6 creates new PRs as drafts in a non-interactive shell; `--publish` keeps this arm
-    // matching the `gh pr create` arm's non-draft PR.
-    expect(submitLine, "gt submit must carry --publish, or a non-interactive shell opens the PR as a draft").toMatch(/\s--publish(\s|$)/);
-    // The title and body this arm actually needs come from `gh pr edit` instead, reading the
-    // same two files the other arm's `gh pr create` reads.
-    const editLine = oneLine(elseArm, "gh pr edit ", "the fork's `else` arm's gh pr edit invocation");
+    expect(code(), "gt submit may only ever run with --update-only").not.toMatch(/gt submit(?! --update-only)/);
+    // The failure after the PR is open is PR_UNRECORDED (Outcome C), never NO_PR (Outcome A).
+    expect(after).toContain('echo "PR_UNRECORDED: gt submit --update-only failed after gh pr create opened the PR');
+    // The title and body Graphite may overwrite come back through `gh pr edit` with the same stamped
+    // literal title and the same body file, so the reader gate allows the edit.
+    const editLine = oneLine(after, "gh pr edit ", "the stacked-only block's gh pr edit invocation");
     expect(editLine).toBe(
-      'gh pr edit "$BRANCH" --repo "$REPO" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE" \\',
+      `gh pr edit "$BRANCH" --repo "$REPO" ${TITLE_SLOT} --body-file .drawbar/tmp/ship/body \\`,
     );
   });
 
-  // The stacked arm's title/body write must survive Graphite rewriting the description after
+  // The stacked block's title/body write must survive Graphite rewriting the description after
   // `gt submit` returns (PES run, PR #6995: the read-back failed and the run parked). The edit
-  // and the read-back are one bounded retry loop; only the last attempt's failure refuses.
-  test("the stacked arm re-applies and re-verifies the PR body in a bounded retry loop, and its refusal carries the attempt count", () => {
-    const c = code();
-    const forkStart = c.indexOf('if [ "$BASE" = "$BASE_BRANCH" ]; then');
-    const forkElse = c.indexOf("\nelse\n", forkStart);
-    const forkEnd = c.indexOf("\nfi\n", forkElse);
-    const elseArm = c.slice(forkElse, forkEnd);
+  // and the read-back are one bounded retry loop; only the last attempt's failure refuses. The
+  // read-back must EQUAL the stamped title and body (so every `Review provenance:` line the body
+  // file holds is in it, wherever it sits), not merely start with a fixed prefix.
+  test("the stacked block re-applies and re-verifies the PR title and body in a bounded retry loop, and its refusal carries the attempt count", () => {
+    const { after } = openingParts();
+    const elseArm = after;
     expect(elseArm).toContain("PR_BODY_ATTEMPTS=4\n");
+    expect(elseArm).toContain('PR_BODY_WANT=$(cat "$PR_BODY_FILE")\n');
+    expect(elseArm).toContain('PR_TITLE_WANT=$(cat "$PR_TITLE_FILE")\n');
     const whileAt = elseArm.indexOf('while [ "$PR_BODY_TRY" -le "$PR_BODY_ATTEMPTS" ]; do');
     const doneAt = elseArm.indexOf("\ndone\n", whileAt);
     expect(whileAt, "the retry loop is missing").toBeGreaterThan(-1);
     expect(doneAt).toBeGreaterThan(whileAt);
     const loop = elseArm.slice(whileAt, doneAt);
+    const READ = `gh pr view "$BRANCH" --repo "$REPO" --json title,body -q '.title + "\\n" + .body'`;
+    const CMP = '"$PR_TITLE_WANT"$\'\\n\'"$PR_BODY_WANT" ]';
     // The re-apply and the read-back both sit INSIDE the loop, so every attempt re-writes the body.
     expect(loop).toContain('gh pr edit "$BRANCH"');
-    expect(loop).toContain('gh pr view "$BRANCH" --repo "$REPO" --json body -q .body');
-    expect(loop).toContain('"${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK"');
+    expect(loop).toContain(`PR_BODY_CHECK=$(${READ})`);
+    expect(loop).toContain(`[ "$PR_BODY_CHECK" = ${CMP}`);
+    expect(loop, "the read-back must not be a prefix test").not.toContain("reviewed at }");
     // Acceptance needs BOTH reads: a match, a settle sleep, a second read that also matches, in
     // that order, all before PR_BODY_OK=true, so an overwrite landing after the first read fails the attempt.
     expect(elseArm).toContain("PR_BODY_SETTLE=5\n");
-    const iFirst = loop.indexOf('"${PR_BODY_CHECK#reviewed at }" != "$PR_BODY_CHECK"');
+    const iFirst = loop.indexOf(`[ "$PR_BODY_CHECK" = ${CMP}`);
     const iSleep = loop.indexOf('sleep "$PR_BODY_SETTLE"');
     const iSecondRead = loop.indexOf("PR_BODY_SETTLED_CHECK=$(gh pr view");
-    const iSecondCmp = loop.indexOf('"${PR_BODY_SETTLED_CHECK#reviewed at }" != "$PR_BODY_SETTLED_CHECK"');
+    const iSecondCmp = loop.indexOf(`[ "$PR_BODY_SETTLED_CHECK" = ${CMP}`);
     const iOk = loop.indexOf("&& PR_BODY_OK=true");
     expect(iFirst).toBeGreaterThan(-1);
     expect(iSleep).toBeGreaterThan(iFirst);
@@ -2301,7 +2318,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     expect(loop).toContain("PR_BODY_WAIT=$((PR_BODY_WAIT * 2))");
     expect(loop).toContain('if [ "$PR_BODY_TRY" -lt "$PR_BODY_ATTEMPTS" ]; then sleep "$PR_BODY_WAIT"');
     expect(loop).not.toContain("exit 1");
-    // Nothing outside the loop re-reads the body: one gh pr edit in the arm, inside the loop.
+    // Nothing outside the loop re-reads the body: one gh pr edit in the block, inside the loop.
     expect(elseArm.match(/gh pr edit /g)!.length).toBe(1);
     // The refusal comes only after the loop and names the attempt count.
     const refusal = elseArm.slice(doneAt).match(/echo "PR_UNRECORDED: [^"]*"/);
@@ -2401,21 +2418,25 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
   });
 
   // --- CRITICAL 2: report text never reaches a command line ---------------------------------
-  test("CRITICAL 2: gh pr create is one literal invocation with --repo/--base/--head and --body-file", () => {
+  test("CRITICAL 2: gh pr create is one literal invocation with --repo/--base/--head, the stamped title literal and --body-file", () => {
     const c = code();
-    // The run's first story (base == the config's trunk) opens through this literal `gh pr
-    // create` line, in the fork's `then` arm — every story after it takes the `else` arm's
-    // `gt track` / `gt submit` path instead (its own test, "PR_URL is assigned exactly twice…").
-    const thenArm = c.slice(0, c.indexOf("\nelse\n"));
-    const line = oneLine(thenArm, "PR_URL=", "§4's gh pr create invocation");
+    // Every story opens through this one `gh pr create` line, `gh` as its command word so the reader
+    // gate sees it. The title is the one typed literal (its shape is gated by the review script); the
+    // body is a relative path the gate resolves from the fence's own working directory.
+    const line = oneLine(c, "gh pr create ", "§4's gh pr create invocation");
     expect(line).toBe(
-      'PR_URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$(cat "$PR_TITLE_FILE")" --body-file "$PR_BODY_FILE") \\',
+      `gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" ${TITLE_SLOT} --body-file .drawbar/tmp/ship/body >/dev/null \\`,
     );
+    // Exactly two title slots in the whole fence, the create and the edit; no `$(...)` title anywhere.
+    expect(c.split(TITLE_SLOT).length - 1, "the title literal appears exactly twice").toBe(2);
     // `--body` (the inline form) must not exist anywhere: it is the one flag that would take
     // report text as an argv element.
     expect(c).not.toMatch(/--body(?!-file)\b/);
     // …and no title/body/branch text is ever interpolated from a variable into the argv.
     expect(c).not.toMatch(/--title "\$[A-Z]/);
+    expect(c).not.toMatch(/--body-file "?\$/);
+    // The gate cannot see a `gh` hidden inside `$(...)`: neither command is assigned from one.
+    expect(c).not.toMatch(/\$\(gh pr (create|edit)/);
   });
 
   // --- CRITICAL 2, re-derived for PCO-371 -----------------------------------------------------
@@ -2465,7 +2486,11 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     // every retired heredoc BODY was made of them, so this single character is the load-bearing
     // one — an agent-substituted value has nowhere to land without it. §4's comments explain the
     // retired constructs by name and are stripped by `code()` before this runs.
-    expect(c, "§4's fence carries a `<` — a redirection in, or an agent fill-in slot").not.toContain("<");
+    // The one fill-in slot is the reader-gated title literal, in two places (the create and the edit),
+    // inside single quotes; everything else stays free of `<`.
+    expect(c.split(TITLE_SLOT).join(""), "§4's fence carries a `<` — a redirection in, or an agent fill-in slot").not.toContain(
+      "<",
+    );
     // The four retired sentinels are gone from the WHOLE doc, comments included: a fence comment
     // still naming one is the first step of putting it back.
     for (const s of [
@@ -2531,8 +2556,12 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
         /^[A-Z][A-Z0-9_]*=\$\(jq -[rc] '[^']*' "\$INPUTS"\)$/,
       ],
       BRANCH_FILE: [/^BRANCH_FILE="\$\{IN_DIR\}\/branch"$/, /^BRANCH=\$\(cat "\$BRANCH_FILE"\)$/],
-      PR_TITLE_FILE: [/^PR_TITLE_FILE="\$\{IN_DIR\}\/title"$/, /--title "\$\(cat "\$PR_TITLE_FILE"\)"/],
-      PR_BODY_FILE: [/^PR_BODY_FILE="\$\{IN_DIR\}\/body"$/, /--body-file "\$PR_BODY_FILE"/],
+      PR_TITLE_FILE: [/^PR_TITLE_FILE="\$\{IN_DIR\}\/title"$/, /^PR_TITLE_WANT=\$\(cat "\$PR_TITLE_FILE"\)$/],
+      PR_BODY_FILE: [
+        /^PR_BODY_FILE="\$\{IN_DIR\}\/body"$/,
+        /^grep -q '\^Review provenance: reviewed at ' "\$PR_BODY_FILE" \\$/,
+        /^PR_BODY_WANT=\$\(cat "\$PR_BODY_FILE"\)$/,
+      ],
     };
     const trapLine = oneLine(c, "trap ", "§4's inputs cleanup trap");
     const gate = markedBlock("# --- inputs file gate", "# --- end inputs file gate");
@@ -2564,7 +2593,7 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     for (const [leaf, tail] of [
       ["inputs.json", "the inputs document below, filled in."],
       ["branch", "the story-lead report's `branch` field, verbatim, one line and nothing else."],
-      ["title", "the PR title, one line and nothing else."],
+      ["title", "the PR title, one line and nothing else, in the shape the title rule above gives."],
     ] as [string, string][]) {
       expect(oneUnit(`- \`<cwd>/.drawbar/tmp/ship/${leaf}\``, `§4's ${leaf} write instruction`)).toBe(
         `- \`<cwd>/.drawbar/tmp/ship/${leaf}\` — ${tail}`,
@@ -2579,11 +2608,11 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     }
     // The fence's own half of the claim, so the executable block is not read as promising
     // something its comments alone assert.
-    expect(units.some((u) => u.startsWith("**The fence authors none of those four files"))).toBe(true);
-    expect(oneUnit("**The fence authors none of those four files", "§4's no-substitution claim")).toContain(
-      "It carries no fill-in slot at all: every value it consumes it reads back out of a file it " +
-        "did not write, with `jq -r`, `cat` or `--body-file`, so no text from the repository " +
-        "under review is ever parsed by a shell.",
+    expect(units.some((u) => u.startsWith("**The opening fence authors none of those four files"))).toBe(true);
+    expect(oneUnit("**The opening fence authors none of those four files", "§4's no-substitution claim")).toContain(
+      "Every other value it consumes it reads back out of a file it did not write, with `jq -r`, " +
+        "`cat` or `--body-file`, so no text from the repository under review is parsed by a shell, " +
+        "except a title that the review script's shape gate has already passed.",
     );
     // PCO-371 fix pass, IMPORTANT: `<cwd>` used to be described as "the same `$PWD` Preflight
     // resolves `$CONFIG` against" — which §6's own fence comment contradicts ("this fence's $PWD
@@ -3374,24 +3403,24 @@ describe("PCO-370 R3b: §4's executable stacked-PR fence", () => {
     // …and each refusal site maps to exactly one documented outcome, by count. `NO_PR:` is
     // Outcome A, whose definition is "a refusal at any of the required checks before a PR
     // exists". assert-chain and resolve-base contribute one each; the PR-opening call
-    // contributes one more for the run's first story (`gh pr create` failing) — or three for
-    // every story after it, whose Graphite path has three failure points before a PR exists
-    // (`git checkout`, `gt track`, `gt submit`), one NO_PR site each. Once `gt submit` has
-    // actually opened the PR, every later failure is Outcome C like any other post-open
-    // failure, not Outcome A — `gh pr edit` failing, the PR-URL read-back failing, the PR-body
-    // read-back failing, and the PR body not carrying its expected first line, are all
+    // contributes one more (`gh pr create` failing), and a story stacked on a previous story's
+    // branch adds two more before any PR exists (`git checkout`, `gt track`). Once `gh pr create`
+    // has opened the PR, every later failure is Outcome C like any other post-open failure, not
+    // Outcome A — `gt submit --update-only` failing, `gh pr edit` failing, the PR-URL read-back
+    // failing, and the title and body not reading back equal to the stamped text, are all
     // `PR_UNRECORDED:`, not `NO_PR:`. Total NO_PR: 1 (assert-chain) + 1 (resolve-base) + 1
-    // (gh pr create) + 3 (checkout/track/submit) + 1 (trunk fetch before assert-chain, which
-    // refuses rather than judge the chain on a stale remote-tracking trunk) = 7.
+    // (gh pr create) + 2 (checkout/track) + 1 (trunk fetch before assert-chain, which
+    // refuses rather than judge the chain on a stale remote-tracking trunk) = 6.
     const noPr = [...c.matchAll(/echo "NO_PR: [^"]*"/g)].map((m) => m[0]);
-    expect(noPr.length, "NO_PR: must mark exactly the required pre-PR checks of Outcome A").toBe(7);
+    expect(noPr.length, "NO_PR: must mark exactly the required pre-PR checks of Outcome A").toBe(6);
     for (const site of noPr) {
       expect(site, `a NO_PR: site claims a PR is open — that is Outcome C: ${site}`).not.toContain("PR is open");
     }
     // 13 since the round-trip assert-chain got its own trunk fetch (a failed fetch there is Outcome C: the PR is already open).
     // 11 since the stacked arm's edit, read-back and first-line check became one bounded retry loop with a single refusal.
+    // 12 since `gt submit --update-only` runs after `gh pr create` has opened the PR, so its failure is Outcome C too.
     const unrecorded = [...c.matchAll(/echo "PR_UNRECORDED: [^"]*"/g)].map((m) => m[0]);
-    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(11);
+    expect(unrecorded.length, "every post-create refusal must be an Outcome C site").toBe(12);
     for (const site of unrecorded) {
       expect(site, `an Outcome C site does not say the PR is open: ${site}`).toContain(
         "— the PR is open; park the story with that reason (Outcome C) and repair the run state by hand.",
@@ -6328,9 +6357,14 @@ describe("PCO-375: reviewed_sha pins the commit each review actually read", () =
   test("ship §4 publishes the review-provenance line in every PR body, with N derived from reviewed_sha and head_sha", () => {
     const txt = ship375();
     expect(txt).toContain(
-      "**Every PR body opens with a review-provenance line, on a flagged story and a clean one " +
-        "alike**, built before `gh pr create` runs: `reviewed at <reviewed_sha> from " +
-        "<spec_source>; N commits since`, where `<reviewed_sha>` is what the reviewers read, " +
+      "**Every PR body opens with what the story changes for a person, and ends with a folded " +
+        "evidence block that carries the review-provenance line.**",
+    );
+    // The line moved from the top of the body into the folded evidence block (reader standard RS1
+    // and RS6, enforced by the reader gate); every rule about stating N and the source stayed.
+    expect(txt).toContain(
+      "`Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, " +
+        "where `<reviewed_sha>` is what the reviewers read, " +
         "`<spec_source>` is `cli` or `brief` — the source that review actually read the spec from " +
         "— and `N` is the commit count between the sha and the story-lead's `head_sha`, all three " +
         "taken from that report.",
@@ -6353,7 +6387,7 @@ describe("PCO-375: reviewed_sha pins the commit each review actually read", () =
     // subagent that read a branch under review. The gate killed the "leave the line off" hatch
     // and left nothing fail-closed in its place; this is that.
     expect(txt).toContain(
-      "**Shape-check both shas before you build that line, and park the story if either refuses.**",
+      "**Shape-check both shas before you build the provenance line, and park the story if either refuses.**",
     );
     expect(txt).toContain("Each must match `^[0-9a-f]{40}$`");
     expect(txt).toContain('`git -C "$PROJECT_DIR" cat-file -e "<sha>^{commit}"`');
@@ -6378,7 +6412,7 @@ describe("PCO-375: reviewed_sha pins the commit each review actually read", () =
   // the agent what to put in the file. Same instruction, same pin, new home — asserted as one
   // whole logical UNIT with `toEqual`, so a clause appended to it fails here exactly as a deletion
   // does; a `toContain` on a heredoc body could not say that.
-  test("the §4 instruction that renders the PR body carries the review-provenance line as its first line", () => {
+  test("the §4 instruction that renders the PR body carries the review-provenance line in its folded evidence block", () => {
     const units = docUnits(docSection(SHIP_375, "## 4. Open the stacked PR"));
     const body = units.filter((u) => u.startsWith("- `<cwd>/.drawbar/tmp/ship/body`"));
     expect(body.length, "§4 must carry exactly one `body` write instruction").toBe(1);
@@ -6387,7 +6421,7 @@ describe("PCO-375: reviewed_sha pins the commit each review actually read", () =
     // exist for are named here explicitly, so a future edit to SH4_BODY_FILE_UNIT that drops one
     // of them still fails.
     expect(body[0]).toContain(
-      "Its first line is the review-provenance line `reviewed at <reviewed_sha> from " +
+      "The evidence block holds the line `Review provenance: reviewed at <reviewed_sha> from " +
         "<spec_source>; N commits since`, with both shas already shape-checked and resolved per " +
         "the prose above.",
     );
@@ -7001,8 +7035,9 @@ const WK6 = "## 6. Review and fix loop";
 // role the retired `DRAWBAR_PR_BODY_SENTINEL` heredoc body played, and the reason IMPORTANT 9 and
 // PCO-375 pin the instruction rather than only the paragraph describing it.
 const SH4_BODY_FILE_UNIT =
-  "- `<cwd>/.drawbar/tmp/ship/body` — the PR body, verbatim. Its first line is the " +
-  "review-provenance line `reviewed at <reviewed_sha> from <spec_source>; N commits since`, with " +
+  "- `<cwd>/.drawbar/tmp/ship/body` — the PR body, verbatim, built as the list above says: the " +
+  "plain-language opening first, the folded evidence block last. The evidence block holds the line " +
+  "`Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, with " +
   "both shas already shape-checked and resolved per the prose above. On a flagged story it is " +
   "written out here with its `## Unresolved findings` section already in it, listing each " +
   "surviving finding as `<SUB-ISSUE-ID> — <sub-issue title>` and nothing else: never the finding " +
@@ -7046,14 +7081,7 @@ const SH4_PROSE: readonly string[] = [
       "A): the default would silently fall back to the repo's default branch, producing a PR " +
       "whose diff carries every earlier story's work too — green, plausible, and " +
       "near-impossible to spot in the morning.",
-    "**The run's first story opens through `gh pr create` with `--base` set explicitly. Every " +
-      "story after it is based on a previous story's branch, not the trunk, and ships as a " +
-      "Graphite stack by default: it runs `gt track` against that real parent, then `gt " +
-      "submit` to open the PR.** Shipping a dependent-PR wave through Graphite is the default " +
-      "everywhere in this repository, and this run's own stack is exactly that wave. Both " +
-      "paths still read the PR title and body only through the tool that consumes them at " +
-      "runtime, and both still go through the same PR-number read-back and stack-entry gates " +
-      "below.",
+    "**Every story opens through `gh pr create` with `--base` set explicitly, from title and body text that has already passed the reader review below (the reader gate, a PreToolUse hook, refuses `gh pr create` and `gh pr edit` of any other text). The run's first story is based on the trunk. Every story after it is based on a previous story's branch, not the trunk, and ships as a Graphite stack by default: it runs `gt track` against that real parent, opens the PR with `gh pr create` against that parent, then runs `gt submit --update-only` so Graphite links the open PR into the stack.** Shipping a dependent-PR wave through Graphite is the default everywhere in this repository, and this run's own stack is exactly that wave. `gt submit` without `--update-only` is never run here: for a branch with no PR yet it would write the PR text from a commit message the reader review never saw, and the gate refuses it. Both paths still read the PR title and body only through the tool that consumes them at runtime (the one exception is the title, below), and both still go through the same PR-number read-back and stack-entry gates.",
     "**The `run-ci` label lives on the top of the stack only (Reid, 2026-09-17).** A stacked PR's CI workflows filter on the base branch, so every member above the first skips its suites and still shows green; the label makes the full suite run. The top's tree contains every member below it, so one labelled run covers the whole stack, and labelling every member multiplies CI minutes for no extra evidence, worst of all when a change ripples up the stack.",
     "- **Add** `run-ci` to the PR this step opens, once it is open (`gh pr edit <n> --add-label run-ci`). Add it again when a change is pushed to the current top and needs verifying.",
     "- **Remove** it when that labelled run is green, or just before the next story's PR is submitted on top, whichever comes first (`gh pr edit <n> --remove-label run-ci`). The new top gets it.",
@@ -7087,31 +7115,15 @@ const SH4_PROSE: readonly string[] = [
       "<pr> -R <repo>` (from the meta-agent repo, on PATH): exit 1 means a visual change went out " +
       "without images, or the PR's own diff carries image files, and the story is reported " +
       "flagged, never ok.",
-    "**Every PR body opens with a review-provenance line, on a flagged story and a clean one " +
-      "alike**, built before `gh pr create` runs: `reviewed at <reviewed_sha> from " +
-      "<spec_source>; N commits since`, where `<reviewed_sha>` is what the reviewers read, " +
-      "`<spec_source>` is `cli` or `brief` — the source that review actually read the spec from " +
-      "— and `N` is the commit count between the sha and the story-lead's `head_sha`, all three " +
-      "taken from that report. The fix pass commits after the reviewers read the diff, so every " +
-      "review is stale by construction and `N` is normally non-zero; stating it is the whole " +
-      "point, and no second review round closes it. **State `N` even when it is zero** — an " +
-      "omitted line reads exactly like a review that was never stale, which is the claim this " +
-      "line exists to stop anyone making. **State `<spec_source>` even when it is `cli`** — a " +
-      "review that never reached Linear is blind to an AMENDED banner, a superseded section and " +
-      "a struck decision, and on this unattended path the PR body is the only place a reader " +
-      "can find that out; printing it only when it is `brief` makes its absence the signal, and " +
-      "an absence is what nobody notices at 3am.",
-    "**Shape-check both shas before you build that line, and park the story if either " +
-      "refuses.** `reviewed_sha` and `head_sha` reach you as free text from a subagent that " +
-      "read a branch under review, and the story-lead's contract copies them through verbatim — " +
-      "nothing between there and here has looked at them. Each must match `^[0-9a-f]{40}$`, and " +
-      "each must resolve in the repository this PR opens against: `git -C \"$PROJECT_DIR\" " +
-      "cat-file -e \"<sha>^{commit}\"`. `N` is then `git -C \"$PROJECT_DIR\" rev-list --count " +
-      "\"<reviewed_sha>..<head_sha>\"`, anchored the same way and never derived from whatever " +
-      "branch happens to be checked out. A sha that is malformed, or that does not resolve " +
-      "here, parks the story with that as the reason — it attests to a tree this repository " +
-      "does not have, and a foreign 40-hex sha is shape-identical to a real one once it is in " +
-      "the PR body. Where the two reviewers read different shas, name both, one line each.",
+    "**Every PR body opens with what the story changes for a person, and ends with a folded evidence block that carries the review-provenance line.** The text is read by someone who has not seen this run, and the reader review below fails it otherwise. Build the title and the body from the story-lead's `summary` and the story's sub-issue, in this order:",
+    "- **Title.** What a person gets, in no more than 12 words, with no ticket code, flag name or file name. Use only letters, digits, spaces and `. , : ( ) / + -`: the title is typed into the opening command as a literal (see the reader review below), and a title with a quote, a dollar sign, a backtick or a backslash is rewritten, not escaped.",
+    "- **Opening, one or two sentences.** Who is affected, what they can now do or see, and why. A story with no visible effect says so (\"No one sees a difference; this removes a risk of ...\"). No mechanism, file, flag or code name here. A new term gets a one-line meaning at its first use. A sub-issue id is always followed by its title.",
+    "- **Stack sentence, when the PR is not the run's first.** One sentence on what the stack achieves for a person and where this PR sits in it. Name the other PRs by title.",
+    "- **`## Unresolved findings` and `## Screenshots`**, when the rules above call for them, each built before the reader review runs.",
+    "- **The ask, one sentence.** What the reader must do and by when, for example \"Review and merge this PR in order with the others when you are back; no decision is needed first.\"",
+    "- **Last, one folded evidence block** (`<details>` with a summary line `Evidence`), holding the tests run, the gate results and the review-provenance line, which is a line of its own: `Review provenance: reviewed at <reviewed_sha> from <spec_source>; N commits since`, where `<reviewed_sha>` is what the reviewers read, `<spec_source>` is `cli` or `brief` — the source that review actually read the spec from — and `N` is the commit count between the sha and the story-lead's `head_sha`, all three taken from that report. The fix pass commits after the reviewers read the diff, so every review is stale by construction and `N` is normally non-zero; stating it is the whole point, and no second review round closes it. **State `N` even when it is zero** — an omitted line reads exactly like a review that was never stale, which is the claim this line exists to stop anyone making. **State `<spec_source>` even when it is `cli`** — a review that never reached Linear is blind to an AMENDED banner, a superseded section and a struck decision, and on this unattended path the PR body is the only place a reader can find that out; printing it only when it is `brief` makes its absence the signal, and an absence is what nobody notices at 3am. The line moved from the top of the body to this block because the reader standard puts evidence last and folded (rules RS1 and RS6); the fence below still refuses a body that lacks it, and finds it anywhere in the body.",
+    "If the session's own instructions require an attribution footer, it goes into the body file now, before the reader review. The review stamps every byte, so a footer added later is refused.",
+    "**Shape-check both shas before you build the provenance line, and park the story if either refuses.** `reviewed_sha` and `head_sha` reach you as free text from a subagent that read a branch under review, and the story-lead's contract copies them through verbatim — nothing between there and here has looked at them. Each must match `^[0-9a-f]{40}$`, and each must resolve in the repository this PR opens against: `git -C \"$PROJECT_DIR\" cat-file -e \"<sha>^{commit}\"`. `N` is then `git -C \"$PROJECT_DIR\" rev-list --count \"<reviewed_sha>..<head_sha>\"`, anchored the same way and never derived from whatever branch happens to be checked out. A sha that is malformed, or that does not resolve here, parks the story with that as the reason — it attests to a tree this repository does not have, and a foreign 40-hex sha is shape-identical to a real one once it is in the PR body. Where the two reviewers read different shas, name both, one line each.",
     "**Nothing carries over into the fence below.** No shell state survives across two Bash " +
       "tool calls, so every value it consumes is re-derived inside it from one source of truth " +
       "— a fresh `ship-config.ts validate`, behind the same two `$CONFIG` guards Preflight " +
@@ -7132,13 +7144,13 @@ const SH4_PROSE: readonly string[] = [
     "- `<cwd>/.drawbar/tmp/ship/inputs.json` — the inputs document below, filled in.",
     "- `<cwd>/.drawbar/tmp/ship/branch` — the story-lead report's `branch` field, verbatim, one " +
       "line and nothing else.",
-    "- `<cwd>/.drawbar/tmp/ship/title` — the PR title, one line and nothing else.",
+    "- `<cwd>/.drawbar/tmp/ship/title` — the PR title, one line and nothing else, in the shape the title rule above gives.",
     SH4_BODY_FILE_UNIT,
-    "**The fence authors none of those four files and substitutes nothing into itself.** It " +
-      "carries no fill-in slot at all: every value it consumes it reads back out of a file it did " +
-      "not write, with `jq -r`, `cat` or `--body-file`, so no text from the repository under " +
-      "review is ever parsed by a shell. That is the whole guarantee, and it holds structurally — " +
-      "there is no instruction here for an agent to follow correctly or to skip.",
+    "### Reader review: run it on the final title and body before anything opens",
+    "The reader gate refuses `gh pr create` and `gh pr edit` unless the exact text `title`, a blank line, then `body` has a passing stamp from `reader-review` (rules RS1 to RS12 of the `reader-standard` skill, kind `pr`). Once the four files are written, run `bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pr-reader-review.sh\"` with the Bash tool's `timeout` set to 600000 (the review is a model run). The script reads only `title` and `body` under `<cwd>/.drawbar/tmp/ship/`, checks the title's shape, joins the two into `pr-text` there, runs `reader-review` on it and prints `READER_PASS` with a `PR_TITLE_LITERAL:` line, or `READER_FAIL` with the findings.",
+    "**One fix-and-retry round, then park.** On `READER_FAIL`, read the findings it printed, rewrite `title` and `body` with the Write tool to fix each finding by its rule (the most common are the opening naming a mechanism, a bare ticket or PR number, and evidence above the end of the body), and run the script a second time. A second `READER_FAIL`, or a `reader-review` that cannot run, parks the story: go to *Parking a story* as Outcome A, with `parked_reason` naming the rule numbers that failed and never the quoted text. **There is no bypass.** Never put `READER_GATE=off` in a command here, never `--no-verify`, and never open the PR from text the script did not pass.",
+    "**The title is the one value the opening fence has typed into it.** The reader gate has to read the exact title before the command runs, and it cannot read a value that a shell builds at run time, so the opening fence's `gh pr create` and `gh pr edit` carry `--title '<the PR_TITLE_LITERAL line>'` as a literal, in single quotes. Copy it from the review script's `PR_TITLE_LITERAL:` output and from nowhere else. The script's title shape gate is what makes that safe: a title that passes it holds nothing a shell treats as special inside single quotes. The body is not typed anywhere: both commands pass `--body-file .drawbar/tmp/ship/body`, a relative path the gate resolves from the same working directory the fence runs in. After a pass, do not touch `title` or `body` again; one changed byte voids the stamp and the gate refuses the opening command.",
+    "**The opening fence authors none of those four files and substitutes only the title literal into itself.** Every other value it consumes it reads back out of a file it did not write, with `jq -r`, `cat` or `--body-file`, so no text from the repository under review is parsed by a shell, except a title that the review script's shape gate has already passed. That is the whole guarantee: the one slot there is has a gate before it and a stamp on the exact text.",
     "**The inputs document is a file you write, never a string the fence assembles.** `branch` is " +
       "not a key in it: a `\"` in a value placed between two `\"` inside a hand-assembled JSON " +
       "document does not produce invalid JSON that `jq -e .` would refuse — it appends keys, and " +
@@ -7864,12 +7876,13 @@ function bashFences(relPath: string): string[] {
 // deterministic path is safe, the reason `branch` is read from its own file, and the reason both
 // $CONFIG guards run again all live here and nowhere else in the fence.
 const SH4_FENCE_COMMENTS: readonly string[] = [
-    "NOTHING in this fence is substituted, and it authors none of the four files it reads. The four values that come out of the repository under review — the inputs document, the branch name, the PR title, the PR body — were written by the agent with the Write tool before this block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so untrusted text is never parsed by a shell at all. The four QUOTED heredocs that used to carry them are gone for good: a substituted line equal to a heredoc terminator closes it early and the rest is parsed as shell, and those terminators are fixed literals published in this public repository. Do not reintroduce a heredoc, a here-string, or any other fill-in slot here. The path is DETERMINISTIC rather than `mktemp -d`, because the agent has to know where to write before this block runs; Preflight prints it, so it is never guessed. That gives up everything `mktemp -d` provided for free, and each half is bought back explicitly below. Unguessability is replaced by the directory gate: this path is entirely predictable, so a branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths cannot see a symlinked component above them — the agent's writes and this block's cleanup would both follow it and truncate four arbitrary files under the operator's identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself. Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT trap truncates all four to zero bytes however this block ends, so a run that REACHES it leaves nothing reusable behind: the file gate below refuses a zero-byte file. It truncates rather than deletes, and it skips a leaf that is a symlink: `: >` follows a symlinked leaf and would truncate its target, where `rm -f` only ever removed the link; but a run that dies before it — session killed, agent errored, story parked in an earlier section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one. Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would otherwise open a PR with no review provenance and no `## Unresolved findings` section at all. What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary regular files at these names, and they would satisfy every other check on the very first run, so a tracked input is refused exactly as a tracked `$CONFIG` is.",
+    "NOTHING in this fence is substituted except the stamped title literal in Check 3 (two places; see there), and it authors none of the four files it reads. The four values that come out of the repository under review — the inputs document, the branch name, the PR title, the PR body — were written by the agent with the Write tool before this block ran, and this block only ever reads them back with `jq -r`, `cat` and `--body-file`, so untrusted text is never parsed by a shell at all. The four QUOTED heredocs that used to carry them are gone for good: a substituted line equal to a heredoc terminator closes it early and the rest is parsed as shell, and those terminators are fixed literals published in this public repository. Do not reintroduce a heredoc, a here-string, or any other fill-in slot here. The path is DETERMINISTIC rather than `mktemp -d`, because the agent has to know where to write before this block runs; Preflight prints it, so it is never guessed. That gives up everything `mktemp -d` provided for free, and each half is bought back explicitly below. Unguessability is replaced by the directory gate: this path is entirely predictable, so a branch under review can commit `.drawbar/`, `.drawbar/tmp/` or `ship` itself as a DIRECTORY SYMLINK (git stores mode 120000 and it survives checkout), and `-L` on the four LEAF paths cannot see a symlinked component above them — the agent's writes and this block's cleanup would both follow it and truncate four arbitrary files under the operator's identity. The gate therefore refuses unless $IN_DIR resolves to exactly itself. Freshness is replaced only PARTLY, and the limit is stated rather than papered over. The EXIT trap truncates all four to zero bytes however this block ends, so a run that REACHES it leaves nothing reusable behind: the file gate below refuses a zero-byte file. It truncates rather than deletes, and it skips a leaf that is a symlink: `: >` follows a symlinked leaf and would truncate its target, where `rm -f` only ever removed the link; but a run that dies before it — session killed, agent errored, story parked in an earlier section — leaves all four on disk, and the file gate cannot tell a stale file from a fresh one. Rewrite ALL FOUR immediately before running this block. That is the one thing here no gate can check for you, and it is why the gate refuses an EMPTY file too: a zero-byte `body` would otherwise open a PR with no review provenance and no `## Unresolved findings` section at all. What the gate CAN tell is authorship: a branch under review can also just COMMIT four ordinary regular files at these names, and they would satisfy every other check on the very first run, so a tracked input is refused exactly as a tracked `$CONFIG` is.",
     "--- inputs directory gate ----------------------------------------------------------------",
     "BEFORE the trap is armed: the trap's `: >` follows a symlinked path component exactly as the agent's writes do, so a redirected $IN_DIR has to be refused while there is still nothing armed to truncate through it. Both sides are symlink-resolved, so an operator whose checkout is reached through a symlink is not refused, while a symlink at any component under it is.",
     "--- end inputs directory gate --------------------------------------------------------------",
     "--- inputs file gate -------------------------------------------------------------------------",
     "--- end inputs file gate ---------------------------------------------------------------------",
+    "The body must carry its `Review provenance:` evidence line (it sits in the folded block at the end, not at the top). A zero-provenance body is refused here, before any PR is opened.",
     "--- read the written inputs ------------------------------------------------------------",
     "Read from its OWN file, never out of the inputs document: `branch` derives from the repository under review, and a `\"` in a value placed between two `\"` in that document would append keys rather than break the parse — jq takes the LAST of a duplicate key, so an injected `\"arg\"`/`\"story\"` silently wins and aims $STATE, assert-chain and resolve-base at a different run. Nothing about this value's text can reach a JSON key, and its emptiness is refused by the ref-name shape gate below.",
     "`flagged` and `teams` are TYPE-checked at the source, not merely non-empty: `flagged` reaches `jq --argjson` below, where the string \"true\" would produce the string \"true\" in the stack entry and `isValidStackEntry` demands a strict boolean.",
@@ -7885,11 +7898,11 @@ const SH4_FENCE_COMMENTS: readonly string[] = [
     "Check 1 of 3 — chain integrity. `--project-dir` is the operator-authored trust root, taken from the fresh validate above, never from the state file's own `resolved_config` copy. `assert-chain` judges stack[0] against `refs/remotes/origin/$BASE_BRANCH` and never fetches, so fetch it here. A failed fetch (offline, auth) REFUSES: judging the chain on a stale trunk ref would pass a story whose work already landed on the trunk. Local `$BASE_BRANCH` is deliberately not consulted.",
     "Echo the verdict's `.reason` and NOTHING else. `.detail` carries absolute paths and the real repo slug, this repo is public, and the Hard rules require refusal text be paraphrased rather than pasted into `parked_reason`, the §5 comment, or a KB entry.",
     "Check 2 of 3 — the base. Locked A: `resolve-base` is the only producer of this value.",
-    "Check 3 of 3 — open it. `--title` reads the file at RUNTIME as one quoted argument and `--body-file` reads it inside `gh`, so no report text is ever part of this command line. A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run and opens through `gh` exactly as before. A story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a dependent-PR stack is Graphite, not `gh`: `gt track` records the real parent so the stack tool knows the chain, then `gt submit` opens (or, on a re-run, updates) the pull request. Both paths still read `$PR_TITLE_FILE` and `$PR_BODY_FILE` only through the tool that consumes them at runtime — no report text is ever part of a command line either way.",
-    "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so both calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch; `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain, so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.)",
-    "`gt submit` (checked against `gt submit --help` on the real CLI, version 1.8.6) takes no `--title` or `--body-file` of its own — only `-d`/`--draft`, `-p`/`--publish`, `-e`/`--edit`, `-n`/`--no-edit`, `--edit-title`/`--no-edit-title`, `--edit-description`/`--no-edit-description` and `-u`/`--update-only`. Passing either flag would fail this call outright. `--no-edit` still opens or updates the PR — with a title and description Graphite derives from the branch's commit message, not the content `$PR_TITLE_FILE` and `$PR_BODY_FILE` hold — so `gh pr edit` immediately below overwrites both with those same two files, the same source `gh pr create` reads from in the other arm. Both arms must open a non-draft PR, and this one only does with `--publish`: in a non-interactive shell (an agent's) `gt submit` prints \"Running in non-interactive mode\" and creates new PRs in draft mode, where an unflagged `gh pr create` opens a ready PR. `--publish` overrides that default so this arm matches the other.",
-    "Graphite can write its own commit-message description into the PR AFTER `gt submit` returns (observed twice: it overwrote the body this fence had just set), so a single `gh pr edit` and one read-back is a race. `gh pr edit` returning success is not proof its write landed with this exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all: long enough for an asynchronous Graphite sync to finish, short enough not to stall an unattended run). An attempt succeeds only when the body read back starts with the same first line `$PR_BODY_FILE` was built with AND still does after a 5 second settle and a second read: a match straight after the edit proves nothing if Graphite's write lands a moment later, and running on with Graphite's description is worse than parking. 5 seconds is a few times the latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls. Only after the last attempt does the fence refuse.",
-    "`gt submit` does not hand back a URL the way `gh pr create` does, so it is read back the same way the rest of this run reads back anything Graphite did: ask `gh` directly. This is the PR-number read-back gate below's input either way, so a Graphite-opened PR is verified exactly as strictly as a `gh`-opened one.",
+    "Check 3 of 3 — open it. Every story opens through `gh pr create` from the text the reader review stamped. The reader gate (a PreToolUse hook) reads the exact title and body BEFORE this block runs, so `--title` is the literal the review script printed as `PR_TITLE_LITERAL:` (its shape was gated by the review script) and `--body-file` is a relative path to the file the gate hashed. Neither is built at run time, because the gate cannot see a value that is. `gh` is the command word of each line below, not the inside of a `$(...)`, so the gate sees every call. Replace `<PR_TITLE_LITERAL>` in the two places it appears with that exact printed title, in the single quotes shown, and change nothing else. A story whose base is the trunk (`$BASE` equals `$BASE_BRANCH`) is the first member of the run. A story whose base is a PREVIOUS story's branch is a stacked member, and the default for shipping a dependent-PR stack is Graphite: `gt track` records the real parent so the stack tool knows the chain, `gh pr create` opens the PR against that parent, and `gt submit --update-only` links the open PR into the stack. `gt submit` never runs without `--update-only`: for a branch with no PR it would write the PR text from a commit message nobody reviewed, and the gate refuses it.",
+    "`gt` operates on the repo at its own cwd, not on a `-C`/`--repo` flag, so its calls run in a subshell `cd`'d into `$PROJECT_DIR` — the same validated trust root every other call in this fence uses, never `$PWD` on its own. On this stacked path `$BASE` is a previous story's branch; `assert-chain` above already confirmed that branch exists and is an ancestor link in the chain, so `gt track` is only ever told a parent this fence has already verified. (For stack[0] it checks the remote-tracking trunk, not local `$BASE_BRANCH`; this branch is never taken for it.) Tracking happens BEFORE the PR exists, so a refusal here is still Outcome A: nothing is open.",
+    "`gt submit --update-only` (checked against `gt submit --help` on the real CLI, version 1.8.6) only pushes branches and updates PRs that already exist, and takes no `--title` or `--body-file`. The PR is open from here on, so every refusal below is PR_UNRECORDED (Outcome C), never NO_PR.",
+    "Graphite can write its own description into the PR AFTER `gt submit` returns (observed twice: it overwrote the body this fence had just set), so the check is a loop, not one read. `gh pr edit` returning success is not proof its write landed with this exact content, and a later Graphite write can undo it. So the edit AND the read-back repeat as one unit, up to four attempts, waiting 2, 4 then 8 seconds between them (14 seconds in all: long enough for an asynchronous Graphite sync to finish, short enough not to stall an unattended run). The edit passes the same stamped title and body file, so the reader gate allows it. An attempt succeeds only when the body read back EQUALS the body file (so it holds every `Review provenance:` line the file holds, wherever they sit) and the title read back equals the title file, AND they still do after a 5 second settle and a second read: a match straight after the edit proves nothing if Graphite's write lands a moment later, and running on with Graphite's description is worse than parking. 5 seconds is a few times the latency of one `gh` call, enough to catch a sync that trails the edit, and it is spent only after a match. A mismatch on either read fails the attempt and the loop re-applies. Worst case is about 34 seconds of waiting (4 settles of 5 plus 2, 4 and 8 of backoff), plus the `gh` calls. Only after the last attempt does the fence refuse. `$(...)` strips trailing newlines from both sides of each comparison, so a final newline that GitHub adds or drops is not a mismatch.",
+    "`gh pr create` printed its URL to /dev/null above so the gate sees a plain `gh` command line; the URL is read back with `gh pr view`, the same way for both paths. This is the PR-number read-back gate's input either way.",
     "--- pr number shape gate --------------------------------------------------------------------",
     "Never `basename \"$PR_URL\"`: unvalidated, and `isValidStackEntry` requires a positive INTEGER.",
     "--- end pr number shape gate -----------------------------------------------------------------",
