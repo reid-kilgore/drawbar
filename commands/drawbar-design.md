@@ -57,6 +57,16 @@ Surface relevant prior decisions, patterns, and any `MUST-CHECK:` entries for th
 
 Explore purpose, constraints, and success criteria. Investigate the codebase (read the actual files) before proposing anything. Batch independent, decision-shaped questions into a single `AskUserQuestion` call (up to 4); reserve one-at-a-time for genuinely exploratory threads or where a later question depends on an earlier answer. **Gate:** confirm scope with the user before designing.
 
+### Premise check — before a question about a mechanism's details
+
+A mechanism is a cap, a floor, a derivation rule or a new kind of record. Before you ask about one, do two things.
+(a) Check every factual claim in the question against the code or data, and name what you read (see Provenance below).
+(b) Look for the user's acceptance that the mechanism should exist: a `DECISION:` comment, or an answer earlier in this
+session. If it exists, cite it in the question. If it does not, ask first, as its own short question, "should this
+exist at all?", and hold every detail question about it until the user says yes. A "no" drops the mechanism and its
+details. Why: detail questions about caps were answered, then the user ruled out the caps and about 20 of 23 pull
+requests were reworked (retro 2026-11-04).
+
 ### Provenance — what you may assert as fact
 
 Before you write a factual claim someone else will act on, ask the one question with a
