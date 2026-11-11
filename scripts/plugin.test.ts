@@ -8783,6 +8783,20 @@ describe("PCO-394 the residual — copied code needs a comparison, and design is
     );
   });
 
+  // Department publishing retro (Reid, askd f18250bd2436): no review compared the design with the
+  // mechanism Reid named, so differences the author chose were locked without a question to him.
+  test("design-reviewer compares the design with the nearest existing mechanism", () => {
+    const doc = flat("agents/design-reviewer.md");
+    expect(doc).toContain("compare it with the nearest existing mechanism");
+    expect(doc, "a general phrase must not settle a specific difference").toContain(
+      "does not settle a specific difference"
+    );
+    expect(doc, "unsourced differences must go to the operator before lock").toContain(
+      "needing a question to the operator before lock"
+    );
+    expect(doc, "the report must carry the comparison").toContain("**Nearest existing mechanism:**");
+  });
+
   test("all three reviewers now question what they are handed", () => {
     for (const rel of ["agents/code-reviewer.md", "agents/security-reviewer.md"]) {
       expect(flat(rel), rel).toContain("A spec can be factually wrong about the code");
