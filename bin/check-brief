@@ -1,0 +1,6 @@
+#!/usr/bin/env bun
+// Thin shim so `check-brief` is a bare command on the Bash tool's PATH while this plugin is
+// enabled, the same way bin/await-report is. The logic lives in scripts/check-brief.ts.
+import { run } from "../scripts/check-brief";
+
+if (import.meta.main) process.exit(run(process.argv.slice(2)));
