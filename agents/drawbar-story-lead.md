@@ -77,6 +77,19 @@ shape-gates the value with `isValidRefName`, and the run state it reads is agent
 a base copied straight out of `stack[]` carries no validation whatsoever. If your brief does
 not say the value came from that call, do not guess — report `status: parked` and say so.
 
+### Check every brief before you dispatch it
+
+Every brief you write carries a `## Decision register` section and a `## Glossary` section, copied
+verbatim from what you were handed. If you were handed none, write `## Decision register: none received`
+or `## Glossary: none received`; never leave a template placeholder, because the sub-agent cannot
+know what was meant to be there (two leads in a row dispatched an implementer with a placeholder in
+that place, MAESTRO note n1316, and a prose rule did not stop it). So write each brief to a file
+first (a file named `<role>-brief.md` inside `$REPORTS`), then run `check-brief` on that file (a
+bare command; this plugin puts it on your `PATH`). It exits 0 and prints `ok` when the brief is
+ready. Any other exit means it refused: fix the brief and run it again. Dispatch only a brief that
+passed, and give the sub-agent that file's text. This covers the implementer, the fix-pass
+implementer, and both reviewers.
+
 ## 1. Recall
 
 ```bash
@@ -222,6 +235,34 @@ your Session rules name a serial wrapper for a heavy typecheck (for example `ser
 for the hourly `typecheck:tests`, which runs one copy at a time per laptop), run that wrapper, never
 the direct command, and never put `timeout` in front of the direct command. If a spec cannot be shown by
 unit tests, say so in your report so the reader knows CI is the first place it runs.
+
+**Run every spec that imports or names a changed module, from every test folder.** A test
+selection built from the folders you expect misses specs. On a payroll stack a spec of a changed
+file never ran, and two tests in `frontend/test/` still asserted the old behavior because the lead
+searched only `__tests__` (MAESTRO note n1337); CI found all three after the local runs were green.
+Do not guess folders. List the project's test paths from the repository itself, and read its
+`CLAUDE.md` for any it adds:
+
+```bash
+git -C "$PROJECT_DIR" ls-files | grep -E '(^|/)(__tests__|tests?|spec)/|\.(test|spec)\.[a-z]+$' \
+  | sed -E 's#(^|/)(__tests__|tests?|spec)/.*#\1\2#' | sort -u
+```
+
+Put what you keep in an array, `TEST_PATHSPECS=(frontend/test/ __tests__ backend/tests/unit mobile-web
+'*.spec.*')` for hourly. Then, for each file the story changed, search all of those paths for its
+basename without the extension:
+
+```bash
+git -C "$PROJECT_DIR" diff --name-only "$BASE_BRANCH"...HEAD | while read -r f; do
+  git -C "$PROJECT_DIR" grep -l -w -e "$(basename "${f%.*}")" -- "${TEST_PATHSPECS[@]}"
+done | sort -u
+```
+
+A basename that is too common, such as `index`, matches too much; search its import path
+(the directory plus `index`) instead. Run every spec this lists, plus the specs that sit beside each changed
+file, with the project's own runner. Where a listed spec is an integration spec, leave it to CI as
+stated above and say so in your report. Where a listed spec fails because it asserts the old
+behavior, update it: it is part of the story.
 
 **Collect any brief claims the implementer reported false, and carry them into `false_claims` in
 §7.** They are about *your* brief, so the temptation is to fix the wording and move on — don't:
