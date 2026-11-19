@@ -2,7 +2,9 @@
 // against the real Claude Code docs (https://code.claude.com/docs/en/hooks.md,
 // "SubagentStop Hook Reference", fetched 2026-09-28): a SubagentStop hook's input JSON includes
 // `agent_type` (the agent's declared name, e.g. `"drawbar-story-lead"`), `agent_id`, and
-// `last_assistant_message`, plus the common fields `session_id`, `transcript_path`, `cwd`.
+// `last_assistant_message`, `agent_transcript_path` (the subagent's own transcript), plus the
+// common fields `session_id`, `transcript_path` (the PARENT session's transcript), `cwd`. The
+// guard reads `agent_transcript_path` only (fixed 2026-11-18 after flagburn's wrong blocks).
 // Blocking works via top-level `{"decision": "block", "reason": "..."}` in the hook's stdout
 // JSON (exit 0), or via exit code 2 with the reason on stderr; either prevents the subagent
 // from stopping. Neither mechanism is documented as loop-proof — a hook that blocks every time

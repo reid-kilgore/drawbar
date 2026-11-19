@@ -11,7 +11,11 @@ import { decide } from "./lib/await-report-hook";
 
 interface HookInput {
   agent_type?: string;
+  /** The PARENT session's transcript in a SubagentStop hook. Never read it: it holds the
+   *  parent's launches and the parent's await-report calls, not the stopping lead's. */
   transcript_path?: string;
+  /** The stopping subagent's own transcript (documented SubagentStop input field). */
+  agent_transcript_path?: string;
 }
 
 async function readStdin(): Promise<string> {
@@ -21,10 +25,13 @@ async function readStdin(): Promise<string> {
 }
 
 export function decideFromInput(input: HookInput): { block: boolean; reason?: string } {
-  if (!input.transcript_path) return { block: false };
+  // Fail open when the agent's own transcript path is missing; do NOT fall back to
+  // `transcript_path`, which is the parent's (flagburn 2026-11-17: 17 wrong blocks, and a lead
+  // held ~75 minutes until the parent happened to run await-report).
+  if (!input.agent_transcript_path) return { block: false };
   let text: string;
   try {
-    text = readFileSync(input.transcript_path, "utf8");
+    text = readFileSync(input.agent_transcript_path, "utf8");
   } catch {
     // Can't read the transcript at all: fail open. A guard that crashes the stop pipeline on a
     // missing/unreadable file is worse than one that occasionally misses a real violation.
