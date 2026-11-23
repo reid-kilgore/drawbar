@@ -8342,6 +8342,12 @@ describe("no shipped instruction hardcodes a team, a project, or a per-worktree 
     expect(txt).toContain("do not file into whichever one happens to come back first from `list_teams`");
   });
 
+  test("drawbar-design creates its spec issue with a state, never leaving it to Triage", () => {
+    // Reid, TOOLING pane, 2026-11-23: two agent-made issues landed in the Triage queue because they were created with no state.
+    const txt = readNonEmpty(join(root, "commands/drawbar-design.md"));
+    expect(txt).toContain("Every new issue is created with a `state` (`Unplanned` unless you have a reason for another)");
+  });
+
   test("the shipped example config documents every key the resolver accepts", () => {
     const example = JSON.parse(readNonEmpty(join(root, ".drawbar/config.example.json"))) as Record<string, unknown>;
     // PCO-374/375/376 fix pass: sourceGuardSpecs joined the three original keys when the
